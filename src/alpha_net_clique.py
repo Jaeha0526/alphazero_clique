@@ -16,101 +16,54 @@ from torch_geometric.data import Data, Batch
 from torch_geometric.utils import to_dense_adj, dense_to_sparse
 
 class CliqueGameData(Dataset):
-    def __init__(self, dataset: List):
-        self.X_edge_index = []  # Edge indices (graph structure)
-        self.X_edge_attr = []   # Edge attributes (player markings)
-        self.y_p = []           # Policy outputs
-        self.y_v = []           # Value outputs
+    def __init__(self, examples):
+        self.examples = examples
         
-        # Process each item in the dataset
-        for item in dataset:
-            if isinstance(item, (list, tuple)) and len(item) == 3:
-                board_state, policy, value = item
-                # Convert board_state to graph representation
-                edge_index, edge_attr = self._board_to_graph(board_state)
-                self.X_edge_index.append(edge_index)
-                self.X_edge_attr.append(edge_attr)
-                self.y_p.append(policy)
-                # Make sure value is a scalar
-                if isinstance(value, (list, tuple, np.ndarray)):
-                    value = value[0] if len(value) > 0 else 0.0
-                self.y_v.append(float(value))
-            else:
-                print(f"Unexpected item structure: {item}")
-                continue
-        
-        # Convert policies and values to tensors
-        self.y_p = torch.stack([torch.from_numpy(np.array(p)).float() for p in self.y_p])
-        self.y_v = torch.tensor(self.y_v, dtype=torch.float32).view(-1, 1)
-        
-        print(f"Final shapes - edge_index: {len(self.X_edge_index)}, "
-              f"y_p: {self.y_p.shape}, y_v: {self.y_v.shape}")
+    def __len__(self):
+        return len(self.examples)
     
-    def _board_to_graph(self, board_state: Dict) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Convert a board state to a graph representation with edge features.
+    def __getitem__(self, idx):
+        board_state, policy, value = self.examples[idx]
         
-        Args:
-            board_state: Dictionary with adjacency_matrix and edge_states
-            
-        Returns:
-            edge_index: Tensor of shape [2, E] containing the indices of the edges
-            edge_attr: Tensor of shape [E, F] containing the features of the edges
-        """
-        # Convert edge_states to features (one-hot encoding)
-        # 0: unselected, 1: player1, 2: player2
-        num_vertices = board_state['adjacency_matrix'].shape[0]
+        # Convert board state to graph format
+        edge_index, edge_attr = self._board_to_graph(board_state)
+        
+        return Data(
+            edge_index=edge_index,
+            edge_attr=edge_attr,
+            policy=torch.tensor(policy, dtype=torch.float),
+            value=torch.tensor(value, dtype=torch.float)
+        )
+    
+    def _board_to_graph(self, board_state):
+        # Extract edge states from board state
         edge_states = board_state['edge_states']
+        num_vertices = board_state['num_vertices']
         
-        # Get edge indices (sparse representation)
-        edge_indices = []
-        edge_features = []
+        # Create edge indices for all possible edges
+        edge_index = []
+        edge_attr = []
         
+        # Add edges between all pairs of vertices
         for i in range(num_vertices):
-            for j in range(i+1, num_vertices):  # Only upper triangular
-                if board_state['adjacency_matrix'][i, j] == 1:  # if edge exists
-                    # Add both directions for undirected graph
-                    edge_indices.append([i, j])
-                    edge_indices.append([j, i])
-                    
-                    # One-hot encode the edge state
-                    state = edge_states[i, j]
-                    if state == 0:  # unselected
-                        feat = [1, 0, 0]
-                    elif state == 1:  # player 1
-                        feat = [0, 1, 0]
-                    else:  # player 2
-                        feat = [0, 0, 1]
-                    
-                    edge_features.append(feat)
-                    edge_features.append(feat)  # Same feature for both directions
+            for j in range(i + 1, num_vertices):
+                edge_index.append([i, j])
+                edge_index.append([j, i])  # Add reverse edge
+                
+                # Create one-hot encoding for edge state
+                state = edge_states[i, j]  # Note: edge_states is a numpy array
+                edge_features = [0, 0, 0]  # [unselected, player1, player2]
+                edge_features[state] = 1
+                edge_attr.append(edge_features)
+                edge_attr.append(edge_features)  # Same features for reverse edge
         
-        # Add self-loops for each vertex with special feature
+        # Add self-loops
         for i in range(num_vertices):
-            edge_indices.append([i, i])
-            edge_features.append([0, 0, 0])  # Special feature for self-loops
+            edge_index.append([i, i])
+            edge_attr.append([1, 0, 0])  # Special feature for self-loops
         
-        # Convert to PyTorch tensors
-        edge_index = torch.tensor(edge_indices, dtype=torch.long).t()  # Shape [2, E]
-        edge_attr = torch.tensor(edge_features, dtype=torch.float)     # Shape [E, 3]
-        
-        return edge_index, edge_attr
-    
-    def __len__(self) -> int:
-        return len(self.X_edge_index)
-    
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        # Return graph data, policy, and value
-        return self.X_edge_index[idx], self.X_edge_attr[idx], self.y_p[idx], self.y_v[idx]
-    
-    def collate_fn(self, batch):
-        """Custom collate function for batching graphs of different sizes"""
-        edge_indices, edge_attrs, policies, values = zip(*batch)
-        
-        # Create a batch of graphs
-        # This is where we'd use PyTorch Geometric's Batch class
-        # For now, we'll just return the separate components
-        return edge_indices, edge_attrs, torch.stack(policies), torch.stack(values)
+        return torch.tensor(edge_index, dtype=torch.long).t().contiguous(), \
+               torch.tensor(edge_attr, dtype=torch.float)
 
 class GNNBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -118,115 +71,120 @@ class GNNBlock(nn.Module):
         self.conv = pyg_nn.GCNConv(in_channels, out_channels)
         self.batch_norm = nn.BatchNorm1d(out_channels)
         
-    def forward(self, x, edge_index, edge_attr=None):
+    def forward(self, x, edge_index):
         x = self.conv(x, edge_index)
         x = self.batch_norm(x)
         x = F.relu(x)
         return x
 
-class EdgeGNNBlock(nn.Module):
-    def __init__(self, in_edge_channels, out_edge_channels, node_channels):
+class EdgeBlock(nn.Module):
+    def __init__(self, node_dim, edge_dim, out_dim):
         super().__init__()
-        self.edge_conv = pyg_nn.EdgeConv(
-            nn.Sequential(
-                nn.Linear(2 * node_channels + in_edge_channels, out_edge_channels),
-                nn.ReLU(),
-                nn.Linear(out_edge_channels, out_edge_channels)
-            ),
-            aggr='add'
-        )
-        self.batch_norm = nn.BatchNorm1d(out_edge_channels)
+        self.node_dim = node_dim
+        self.edge_dim = edge_dim
+        self.out_dim = out_dim
         
+        # Linear layers to process node and edge features
+        self.edge_proj = nn.Linear(edge_dim, out_dim)
+        self.node_proj = nn.Linear(2 * node_dim, out_dim)
+        self.combine = nn.Linear(2 * out_dim, out_dim)
+        self.batch_norm = nn.BatchNorm1d(out_dim)
+    
     def forward(self, x, edge_index, edge_attr):
-        # Process edge features
-        edge_attr = self.edge_conv(x, edge_index, edge_attr)
-        edge_attr = self.batch_norm(edge_attr)
-        edge_attr = F.relu(edge_attr)
-        return edge_attr
+        # Get source and target node features
+        src, dst = edge_index[0], edge_index[1]
+        
+        # Gather node features for each edge
+        src_features = x[src]  # [num_edges, node_dim]
+        dst_features = x[dst]  # [num_edges, node_dim]
+        
+        # Concatenate source and destination features
+        node_features = torch.cat([src_features, dst_features], dim=1)  # [num_edges, 2*node_dim]
+        
+        # Project node and edge features
+        node_features = self.node_proj(node_features)  # [num_edges, out_dim]
+        edge_features = self.edge_proj(edge_attr)  # [num_edges, out_dim]
+        
+        # Combine node and edge information
+        combined = torch.cat([node_features, edge_features], dim=1)  # [num_edges, 2*out_dim]
+        out = self.combine(combined)  # [num_edges, out_dim]
+        
+        # Apply normalization and activation
+        out = self.batch_norm(out)
+        out = F.relu(out)
+        
+        return out
 
 class CliqueGNN(nn.Module):
-    def __init__(self, num_vertices=6):
+    def __init__(self, num_vertices=6, hidden_dim=64):
         super().__init__()
-        # Number of possible edges in a complete graph
+        self.num_vertices = num_vertices
         self.num_edges = num_vertices * (num_vertices - 1) // 2
+        self.hidden_dim = hidden_dim
         
-        # Initial node embeddings
-        self.node_embedding = nn.Embedding(num_vertices, 32)
+        # Initial embeddings
+        self.node_embedding = nn.Embedding(num_vertices, hidden_dim)
+        self.edge_embedding = nn.Linear(3, hidden_dim)  # 3 features for edge state
         
-        # Edge feature processing
-        self.edge_embedding = nn.Linear(3, 32)  # 3 features for edge state
-        
-        # Graph layers
-        self.gnn_layers = nn.ModuleList([
-            GNNBlock(32, 64),
-            GNNBlock(64, 128),
-            GNNBlock(128, 128)
+        # Node update layers
+        self.node_layers = nn.ModuleList([
+            GNNBlock(hidden_dim, hidden_dim),
+            GNNBlock(hidden_dim, hidden_dim)
         ])
         
-        # Edge processing layers
+        # Edge update layers
         self.edge_layers = nn.ModuleList([
-            EdgeGNNBlock(32, 64, 32),
-            EdgeGNNBlock(64, 128, 64),
-            EdgeGNNBlock(128, 128, 128)
+            EdgeBlock(hidden_dim, hidden_dim, hidden_dim),
+            EdgeBlock(hidden_dim, hidden_dim, hidden_dim)
         ])
         
-        # Policy head (outputs probability for each edge)
-        self.policy_head = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1)
-        )
+        # Policy head
+        self.policy_head = nn.Linear(hidden_dim, 1)
         
-        # Value head (outputs game state evaluation)
-        self.value_node_pool = pyg_nn.global_mean_pool
+        # Value head
+        self.value_pool = pyg_nn.global_mean_pool
         self.value_head = nn.Sequential(
-            nn.Linear(128, 64),
+            nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1),
-            nn.Tanh()  # Output between -1 and 1
+            nn.Linear(hidden_dim // 2, 1),
+            nn.Tanh()
         )
-        
+    
     def forward(self, edge_index, edge_attr):
+        # Get number of nodes
+        num_nodes = edge_index.max().item() + 1
+        
         # Initialize node features
-        batch_size = 1  # For single graph inference
-        num_vertices = edge_index.max().item() + 1
+        node_indices = torch.arange(num_nodes, device=edge_index.device)
+        x = self.node_embedding(node_indices)  # [num_nodes, hidden_dim]
         
-        # Create node indices - ensure they're on the same device as edge_index
-        node_indices = torch.arange(num_vertices, device=edge_index.device)
-        
-        # Get node embeddings
-        x = self.node_embedding(node_indices)
-        
-        # Process edge features
-        edge_features = self.edge_embedding(edge_attr)
+        # Initialize edge features
+        edge_features = self.edge_embedding(edge_attr)  # [num_edges, hidden_dim]
         
         # Apply GNN layers
-        for i, (gnn_layer, edge_layer) in enumerate(zip(self.gnn_layers, self.edge_layers)):
+        for node_layer, edge_layer in zip(self.node_layers, self.edge_layers):
             # Update node representations
-            x = gnn_layer(x, edge_index)
+            x_new = node_layer(x, edge_index)
             
-            # Update edge representations
+            # Update edge representations using the original node features
             edge_features = edge_layer(x, edge_index, edge_features)
+            
+            # Update node features
+            x = x_new
         
-        # Generate policy output (one value per edge)
-        # We need to map edge_index to the original edges of the complete graph
-        edge_scores = self.policy_head(edge_features)
+        # Generate policy output
+        edge_scores = self.policy_head(edge_features)  # [num_edges, 1]
         
-        # Extract only the upper triangular part (original edges)
+        # Map edge scores to policy
         policy = torch.zeros(self.num_edges, device=edge_index.device)
-        
-        # Create a mapping from edge_index to the flattened adjacency matrix
         edge_map = {}
         idx = 0
-        for i in range(num_vertices):
-            for j in range(i+1, num_vertices):
+        for i in range(num_nodes):
+            for j in range(i+1, num_nodes):
                 edge_map[(i, j)] = idx
                 edge_map[(j, i)] = idx  # Same index for both directions
                 idx += 1
         
-        # Fill policy vector
         for i in range(edge_index.shape[1]):
             src, dst = edge_index[0, i].item(), edge_index[1, i].item()
             if src < dst:  # Only consider upper triangular
@@ -234,12 +192,12 @@ class CliqueGNN(nn.Module):
                 if edge_idx >= 0:
                     policy[edge_idx] = edge_scores[i]
         
-        # Normalize policy to get a probability distribution
+        # Normalize policy
         policy = F.softmax(policy, dim=0)
         
         # Generate value output
-        batch = torch.zeros(num_vertices, dtype=torch.long, device=edge_index.device)
-        value = self.value_head(self.value_node_pool(x, batch))
+        batch = torch.zeros(num_nodes, dtype=torch.long, device=edge_index.device)
+        value = self.value_head(self.value_pool(x, batch))
         
         return policy, value
 
@@ -259,97 +217,55 @@ class CliqueAlphaLoss(nn.Module):
         total_error = (value_error.float() + policy_error).mean()
         return total_error
 
-def train(net, dataset, epoch_start=0, epoch_stop=20, cpu=0):
-    # Set device
-    num_gpus = torch.cuda.device_count()
-    if num_gpus > 0:
-        gpu_id = cpu % num_gpus
-        device = torch.device(f"cuda:{gpu_id}")
-        print(f"Process {cpu} using GPU {gpu_id}: {torch.cuda.get_device_name(gpu_id)}")
-    else:
-        device = torch.device("cpu")
-        print(f"Process {cpu} using CPU")
-    
-    torch.manual_seed(cpu)
-    
-    net.to(device)
+def train(net, dataset, epoch_start=0, epoch_stop=50, cpu=0):
+    """Train the network on the given dataset"""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    net = net.to(device)
     net.train()
-    criterion = CliqueAlphaLoss()
-    optimizer = optim.Adam(net.parameters(), lr=0.001)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, 
-                                             milestones=[50, 100, 150], 
-                                             gamma=0.2)
     
+    # Create data loader
     train_set = CliqueGameData(dataset)
-    train_loader = DataLoader(train_set, batch_size=16, shuffle=True, 
-                            num_workers=2, collate_fn=train_set.collate_fn)
+    train_loader = DataLoader(train_set, batch_size=32, shuffle=True)
     
-    losses_per_epoch = []
+    # Loss functions
+    policy_criterion = nn.CrossEntropyLoss()
+    value_criterion = nn.MSELoss()
+    
+    # Optimizer
+    optimizer = optim.Adam(net.parameters(), lr=0.001)
+    
+    # Training loop
     for epoch in range(epoch_start, epoch_stop):
-        total_loss = 0.0
-        batch_count = 0
+        total_loss = 0
+        policy_loss = 0
+        value_loss = 0
         
-        for i, (edge_indices, edge_attrs, policies, values) in enumerate(train_loader):
-            batch_count += 1
+        for batch in train_loader:
+            # Move batch to device
+            batch = batch.to(device)
             
-            # Process each graph in the batch
-            batch_loss = 0.0
-            for edge_index, edge_attr, policy, value in zip(edge_indices, edge_attrs, policies, values):
-                # Move data to device
-                edge_index = edge_index.to(device)
-                edge_attr = edge_attr.to(device)
-                policy = policy.to(device)
-                value = value.to(device)
-                
-                # Forward pass
-                optimizer.zero_grad()
-                policy_pred, value_pred = net(edge_index, edge_attr)
-                
-                # Compute loss
-                loss = criterion(value_pred, value, policy_pred, policy)
-                loss.backward()
-                
-                # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
-                
-                optimizer.step()
-                batch_loss += loss.item()
+            # Forward pass
+            policy_output, value_output = net(batch)
             
-            # Average loss for the batch
-            batch_loss /= len(edge_indices)
-            total_loss += batch_loss
+            # Calculate losses
+            policy_loss = policy_criterion(policy_output, batch.policy)
+            value_loss = value_criterion(value_output.squeeze(), batch.value)
+            loss = policy_loss + value_loss
             
-            if i % 5 == 4:
-                print(f'Process ID: {os.getpid()} [Epoch: {epoch + 1}, '
-                      f'Batch: {i + 1}/{len(train_loader)}] '
-                      f'loss per batch: {batch_loss:.3f}')
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            policy_loss += policy_loss.item()
+            value_loss += value_loss.item()
         
-        # Step the scheduler after each epoch
-        scheduler.step()
-        
-        # Average loss for the epoch
-        epoch_loss = total_loss / batch_count
-        losses_per_epoch.append(epoch_loss)
-        print(f'Epoch {epoch + 1} completed. Average loss: {epoch_loss:.3f}')
-        
-        # Early stopping
-        if len(losses_per_epoch) > 20:
-            recent_avg = sum(losses_per_epoch[-3:]) / 3
-            earlier_avg = sum(losses_per_epoch[-10:-7]) / 3
-            if abs(recent_avg - earlier_avg) <= 0.005:
-                print("Early stopping triggered")
-                break
-
-    # Plot training loss
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.plot(range(1, len(losses_per_epoch)+1), losses_per_epoch)
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
-    ax.set_title("Training Loss vs Epoch")
-    plt.savefig(os.path.join("./model_data/", 
-                           f"Clique_GNN_Loss_{datetime.datetime.today().strftime('%Y-%m-%d')}.png"))
-    print('Finished Training')
+        # Print epoch statistics
+        num_batches = len(train_loader)
+        print(f"Epoch {epoch}: Total Loss = {total_loss/num_batches:.4f}, "
+              f"Policy Loss = {policy_loss/num_batches:.4f}, "
+              f"Value Loss = {value_loss/num_batches:.4f}")
 
 def create_encoder_decoder_for_clique(num_vertices):
     """

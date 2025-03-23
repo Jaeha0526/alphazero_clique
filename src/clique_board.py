@@ -106,6 +106,7 @@ class CliqueBoard:
         return {
             'adjacency_matrix': self.adjacency_matrix.copy(),
             'edge_states': self.edge_states.copy(),
+            'num_vertices': self.num_vertices,
             'player': self.player,
             'move_count': self.move_count,
             'game_state': self.game_state
