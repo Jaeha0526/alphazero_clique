@@ -36,34 +36,57 @@ class CliqueGameData(Dataset):
         )
     
     def _board_to_graph(self, board_state):
-        # Extract edge states from board state
-        edge_states = board_state['edge_states']
-        num_vertices = board_state['num_vertices']
-        
-        # Create edge indices for all possible edges
-        edge_index = []
-        edge_attr = []
-        
-        # Add edges between all pairs of vertices
-        for i in range(num_vertices):
-            for j in range(i + 1, num_vertices):
-                edge_index.append([i, j])
-                edge_index.append([j, i])  # Add reverse edge
-                
-                # Create one-hot encoding for edge state
-                state = edge_states[i, j]  # Note: edge_states is a numpy array
-                edge_features = [0, 0, 0]  # [unselected, player1, player2]
-                edge_features[state] = 1
-                edge_attr.append(edge_features)
-                edge_attr.append(edge_features)  # Same features for reverse edge
-        
-        # Add self-loops
-        for i in range(num_vertices):
-            edge_index.append([i, i])
-            edge_attr.append([1, 0, 0])  # Special feature for self-loops
-        
-        return torch.tensor(edge_index, dtype=torch.long).t().contiguous(), \
-               torch.tensor(edge_attr, dtype=torch.float)
+        try:
+            # Check what format the board state is in
+            if isinstance(board_state, dict):
+                # Try the standard format first
+                if 'edge_states' in board_state and 'num_vertices' in board_state:
+                    edge_states = board_state['edge_states']
+                    num_vertices = board_state['num_vertices']
+                # For backwards compatibility or different formats
+                elif 'states' in board_state:
+                    edge_states = board_state['states']
+                    num_vertices = edge_states.shape[0]
+                else:
+                    # Print available keys for debugging
+                    print(f"Board state keys: {list(board_state.keys())}")
+                    raise KeyError("Required keys not found in board_state")
+            else:
+                # If board_state is not a dict but the raw edge states array
+                edge_states = board_state
+                num_vertices = edge_states.shape[0]
+            
+            # Create edge indices for all possible edges
+            edge_index = []
+            edge_attr = []
+            
+            # Add edges between all pairs of vertices
+            for i in range(num_vertices):
+                for j in range(i + 1, num_vertices):
+                    edge_index.append([i, j])
+                    edge_index.append([j, i])  # Add reverse edge
+                    
+                    # Create one-hot encoding for edge state
+                    state = edge_states[i, j]  # Note: edge_states is a numpy array
+                    edge_features = [0, 0, 0]  # [unselected, player1, player2]
+                    edge_features[state] = 1
+                    edge_attr.append(edge_features)
+                    edge_attr.append(edge_features)  # Same features for reverse edge
+            
+            # Add self-loops
+            for i in range(num_vertices):
+                edge_index.append([i, i])
+                edge_attr.append([1, 0, 0])  # Special feature for self-loops
+            
+            return torch.tensor(edge_index, dtype=torch.long).t().contiguous(), \
+                   torch.tensor(edge_attr, dtype=torch.float)
+                   
+        except Exception as e:
+            print(f"Error in _board_to_graph: {e}")
+            print(f"Board state type: {type(board_state)}")
+            if isinstance(board_state, dict):
+                print(f"Board state keys: {list(board_state.keys())}")
+            raise
 
 class GNNBlock(nn.Module):
     def __init__(self, in_channels, out_channels):

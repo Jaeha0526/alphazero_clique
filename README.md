@@ -58,3 +58,10 @@ OR
 3) At predetermined checkpoints, run evaluator.py to evaluate the trained net against the neural net from previous iteration. Saves the neural net that performs better. Multiprocessing is enabled, which shares the PyTorch net model in a single CUDA GPU across 6 CPUs workers each running a MCTS self-play. 
 
 4) Repeat for next iteration.
+
+
+# Clique game
+
+'''bash
+python src/pipeline_clique.py --mode pipeline --vertices 6 --clique-size 3 --iterations 3 --self-play-games 2 --mcts-sims 50 --eval-threshold 0.55
+'''
