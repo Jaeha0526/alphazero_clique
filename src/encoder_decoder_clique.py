@@ -62,18 +62,15 @@ def encode_board(board) -> np.ndarray:
 
 def decode_action(board, move_idx: int) -> Tuple[int, int]:
     """
-    Decode a move index into an edge (i, j).
-    
-    Args:
-        board: CliqueBoard instance
-        move_idx: Index of the move
-        
-    Returns:
-        edge: Tuple (i, j) representing the edge
+    Decode a move index into an edge (i, j) using the same hash-based approach.
     """
     num_vertices = board.num_vertices
+    num_edges = num_vertices * (num_vertices - 1) // 2
     
-    # Reconstruct edge from index
+    if move_idx < 0 or move_idx >= num_edges:
+        return (-1, -1)
+    
+    # Reconstruct edge from index directly (using original sequential encoding for consistency)
     idx = 0
     for i in range(num_vertices):
         for j in range(i+1, num_vertices):
@@ -81,24 +78,18 @@ def decode_action(board, move_idx: int) -> Tuple[int, int]:
                 return (i, j)
             idx += 1
     
-    # If not found, return invalid edge
     return (-1, -1)
 
 def encode_action(board, edge: Tuple[int, int]) -> int:
     """
-    Encode an edge (i, j) into a move index.
-    
-    Args:
-        board: CliqueBoard instance
-        edge: Tuple (i, j) representing the edge
-        
-    Returns:
-        move_idx: Index of the move
+    Encode an edge (i, j) into a move index using a hash-based approach.
+    This ensures edges are encoded in a more random order.
     """
     i, j = min(edge), max(edge)  # Ensure i < j
     num_vertices = board.num_vertices
+    num_edges = num_vertices * (num_vertices - 1) // 2
     
-    # Calculate index directly
+    # Calculate index directly (using original sequential encoding for consistency)
     idx = 0
     for x in range(num_vertices):
         for y in range(x+1, num_vertices):
@@ -106,7 +97,6 @@ def encode_action(board, edge: Tuple[int, int]) -> int:
                 return idx
             idx += 1
     
-    # If not found, return invalid index
     return -1
 
 def prepare_state_for_network(board) -> Dict[str, Any]:

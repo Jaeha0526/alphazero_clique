@@ -8,6 +8,7 @@ import torch.multiprocessing as mp
 import numpy as np
 from typing import List, Dict, Any
 import matplotlib.pyplot as plt
+import pickle
 
 from clique_board import CliqueBoard
 from alpha_net_clique import CliqueGNN
@@ -116,131 +117,106 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
     
     return win_rate
 
-def run_iteration(iteration: int, num_self_play_games: int = 100, 
-                 num_vertices: int = 6, clique_size: int = 3,
-                 num_mcts_sims: int = 500, evaluation_threshold: float = 0.55):
-    """
-    Run a complete iteration of the AlphaZero pipeline for Clique Game.
+def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int, 
+                 clique_size: int, mcts_sims: int, eval_threshold: float) -> None:
+    """Run one iteration of the AlphaZero pipeline"""
+    print(f"=== Starting iteration {iteration} ===")
     
-    Args:
-        iteration: Current iteration number
-        num_self_play_games: Number of self-play games to generate
-        num_vertices: Number of vertices in the graph
-        clique_size: Size of clique needed for Player 1 to win
-        num_mcts_sims: Number of MCTS simulations per move
-        evaluation_threshold: Win rate threshold to update best model
-    """
-    # Create directories
-    os.makedirs("./model_data", exist_ok=True)
-    os.makedirs("./datasets/clique", exist_ok=True)
-    
-    # Step 1: Initialize/load models
+    # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
     
-    # Current iteration model
-    current_model = CliqueGNN(num_vertices=num_vertices)
-    current_model_path = f"./model_data/clique_net_iter{iteration-1}.pth.tar"
+    # Initialize model
+    current_model = CliqueGNN(num_vertices, clique_size).to(device)
     
-    # Best model so far
-    best_model = CliqueGNN(num_vertices=num_vertices)
-    best_model_path = "./model_data/clique_net.pth.tar"
-    
-    # Load models if available
-    if iteration > 0 and os.path.exists(current_model_path):
-        current_model.load_state_dict(torch.load(current_model_path, map_location=device)['state_dict'])
-        print(f"Loaded current model from {current_model_path}")
-    else:
-        print("Using new model for current iteration")
+    # Load best model if it exists
+    best_model_path = f"./model_data/clique_net.pth.tar"
+    current_model_path = f"./model_data/clique_net_iter{iteration}.pth.tar"
     
     if os.path.exists(best_model_path):
-        best_model.load_state_dict(torch.load(best_model_path, map_location=device)['state_dict'])
-        print(f"Loaded best model from {best_model_path}")
+        print(f"Loading best model from {best_model_path}")
+        checkpoint = torch.load(best_model_path, map_location=device)
+        current_model.load_state_dict(checkpoint['state_dict'])
     else:
-        # If no best model exists, use the current model
-        torch.save({'state_dict': current_model.state_dict()}, best_model_path)
-        best_model.load_state_dict(current_model.state_dict())
-        print("No best model found, using current model")
+        print("No best model found, starting from scratch")
     
-    # Step 2: Self-play to generate data
-    print(f"\n=== Starting self-play for iteration {iteration} ===")
+    # Make sure model is on CPU before sharing
+    current_model = current_model.cpu()
+    current_model.share_memory()
+    current_model.eval()
     
-    try:
-        # Set up multiprocessing
-        mp.set_start_method("spawn", force=True)
-    except RuntimeError:
-        # Already set, ignore
-        pass
+    # Save current model
+    os.makedirs("./model_data", exist_ok=True)
+    torch.save({'state_dict': current_model.state_dict()}, current_model_path)
     
+    # Run self-play games in parallel
+    print(f"Starting self-play with {num_self_play_games} games")
     processes = []
-    
-    # Number of processes
-    num_cpus = min(mp.cpu_count(), 4)  # Use at most 4 CPUs
+    num_cpus = 3  # Use 4 cores
     games_per_cpu = num_self_play_games // num_cpus
     
-    # Ensure we generate at least the requested number of games
-    if games_per_cpu * num_cpus < num_self_play_games:
-        games_per_cpu += 1
+    # Run at least 1 game per process
+    if games_per_cpu < 1:
+        games_per_cpu = 1
+        
+    # Adjust for remainder
+    remainder = num_self_play_games - (games_per_cpu * num_cpus)
     
-    # Ensure model is on CPU before sharing it across processes
-    best_model = best_model.cpu()
-    best_model.share_memory()
-    
-    # Start self-play processes
+    # Start processes
     for i in range(num_cpus):
+        # Add remainder games to first process
+        games = games_per_cpu + (remainder if i == 0 else 0)
         p = mp.Process(target=MCTS_self_play, 
-                       args=(best_model, games_per_cpu, num_vertices, clique_size, i))
+                      args=(current_model, games, num_vertices, clique_size, i, mcts_sims))
         p.start()
         processes.append(p)
     
-    # Wait for all processes to complete
+    # Wait for all processes to finish
     for p in processes:
         p.join()
     
     print("Self-play completed")
     
-    # Step 3: Train model on generated data
-    print(f"\n=== Starting training for iteration {iteration} ===")
-    
-    # Load all examples
+    # Load all examples from datasets directory
+    print("Loading all examples from datasets")
     all_examples = load_examples("./datasets/clique")
     
     if not all_examples:
         print("No training examples found. Aborting.")
         return
-    
+        
     print(f"Training on {len(all_examples)} examples")
     
-    # Train the network
-    train_network(all_examples, iteration, num_vertices)
+    # Train on all examples
+    print("Training on examples")
+    train_network(all_examples, iteration, num_vertices, clique_size)
     
-    # Step 4: Evaluate against best model
-    print(f"\n=== Starting evaluation for iteration {iteration} ===")
-    
-    # Load the newly trained model
-    current_model_path = f"./model_data/clique_net_iter{iteration}.pth.tar"
-    current_model.load_state_dict(torch.load(current_model_path, map_location=device)['state_dict'])
+    # Save current model
+    os.makedirs("./model_data", exist_ok=True)
+    torch.save({'state_dict': current_model.state_dict()}, current_model_path)
     
     # Evaluate against best model
-    win_rate = evaluate_models(current_model, best_model, 
-                             num_games=40, num_vertices=num_vertices, 
-                             clique_size=clique_size, num_mcts_sims=50)
-    
-    # Step 5: Update best model if current model is better
-    if win_rate >= evaluation_threshold:
-        print(f"Current model win rate {win_rate:.4f} >= threshold {evaluation_threshold}")
-        print("Updating best model")
-        torch.save({'state_dict': current_model.state_dict()}, best_model_path)
+    print("=== Starting evaluation ===")
+    if os.path.exists(best_model_path):
+        best_model = CliqueGNN(num_vertices, clique_size).to(device)
+        checkpoint = torch.load(best_model_path, map_location=device)
+        best_model.load_state_dict(checkpoint['state_dict'])
+        best_model.eval()
+        
+        # Run evaluation using evaluate_models function
+        win_rate = evaluate_models(current_model, best_model, num_games=10, 
+                                 num_vertices=num_vertices, clique_size=clique_size,
+                                 num_mcts_sims=mcts_sims)
+        
+        print(f"Evaluation win rate: {win_rate:.2f}")
+        
+        # Update best model if current model is better
+        if win_rate > eval_threshold:
+            print(f"Current model is better (win rate: {win_rate:.2f} > {eval_threshold})")
+            torch.save({'state_dict': current_model.state_dict()}, best_model_path)
     else:
-        print(f"Current model win rate {win_rate:.4f} < threshold {evaluation_threshold}")
-        print("Keeping current best model")
-    
-    # Save evaluation results
-    with open(f"./model_data/evaluation_results_iter{iteration}.txt", "w") as f:
-        f.write(f"Win rate: {win_rate:.4f}\n")
-        f.write(f"Threshold: {evaluation_threshold:.4f}\n")
-        f.write(f"Updated best model: {win_rate >= evaluation_threshold}\n")
-    
-    print(f"Iteration {iteration} completed")
+        print("No best model exists, saving current model as best")
+        torch.save({'state_dict': current_model.state_dict()}, best_model_path)
 
 def run_pipeline(num_iterations: int = 5, num_self_play_games: int = 100,
                 num_vertices: int = 6, clique_size: int = 3,
@@ -272,7 +248,7 @@ def run_pipeline(num_iterations: int = 5, num_self_play_games: int = 100,
         # Print iteration stats
         end_time = time.time()
         elapsed_time = end_time - start_time
-        print(f"Iteration {iteration+1} completed in {elapsed_time:.2f}s")
+        print(f"Iteration {iteration} completed in {elapsed_time:.2f}s")
         
         # Plot learning curve if possible
         try:
@@ -420,6 +396,13 @@ def play_against_ai(model_path: str = None, num_vertices: int = 6, clique_size: 
             print("Game drawn - board filled!")
 
 if __name__ == "__main__":
+    # Set multiprocessing start method to 'spawn' for CUDA compatibility
+    try:
+        mp.set_start_method('spawn')
+        print("Multiprocessing start method set to 'spawn'")
+    except RuntimeError:
+        print("Multiprocessing start method already set or not needed")
+    
     parser = argparse.ArgumentParser(description="AlphaZero Pipeline for Clique Game")
     
     # Mode selection
@@ -479,11 +462,13 @@ if __name__ == "__main__":
         else:
             print("No model found, using random initialization")
             
+        # Make sure model is on CPU before sharing
+        model = model.cpu()
         model.share_memory()
         model.eval()
         
         # Run self-play
-        MCTS_self_play(model, args.num_games, args.vertices, args.clique_size, args.cpu)
+        MCTS_self_play(model, args.num_games, args.vertices, args.clique_size, args.cpu, args.mcts_sims)
     
     elif args.mode == "train":
         # Load examples

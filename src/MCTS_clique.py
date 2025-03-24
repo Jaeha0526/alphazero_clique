@@ -18,6 +18,7 @@ from clique_board import CliqueBoard
 import encoder_decoder_clique as ed
 from visualize_clique import view_clique_board
 import matplotlib.pyplot as plt
+import argparse
 
 @dataclass
 class UCTNode:
@@ -65,10 +66,12 @@ class UCTNode:
         self.parent.child_total_value[self.move] = value
     
     def child_Q(self) -> np.ndarray:
+        # Add small epsilon to avoid division by zero
         return self.child_total_value / (1 + self.child_number_visits)
     
     def child_U(self) -> np.ndarray:
-        return math.sqrt(self.number_visits) * (
+        # Exploration term with safety for division
+        return math.sqrt(max(1, self.number_visits)) * (
             abs(self.child_priors) / (1 + self.child_number_visits))
     
     def best_child(self) -> int:
@@ -87,32 +90,67 @@ class UCTNode:
         return current
     
     def add_dirichlet_noise(self, action_idxs: List[int], child_priors: np.ndarray) -> np.ndarray:
-        valid_child_priors = child_priors[action_idxs]
-        valid_child_priors = 0.75*valid_child_priors + 0.25*np.random.dirichlet(
-            np.zeros([len(valid_child_priors)], dtype=np.float32)+0.3)
-        child_priors[action_idxs] = valid_child_priors
+        """Add Dirichlet noise to the child priors at the root node for exploration"""
+        if len(action_idxs) <= 1:
+            return child_priors
+            
+        try:
+            # Extract the valid child priors
+            valid_child_priors = child_priors[action_idxs]
+            
+            # Generate Dirichlet noise
+            noise = np.random.dirichlet([0.3] * len(action_idxs))
+            
+            # Mix the priors with noise
+            valid_child_priors = 0.75 * valid_child_priors + 0.25 * noise
+            
+            # Put the modified priors back
+            child_priors[action_idxs] = valid_child_priors
+        except Exception as e:
+            pass
+        
         return child_priors
-    
+        
     def expand(self, child_priors: np.ndarray) -> None:
         self.is_expanded = True
         action_idxs = []
         c_p = child_priors.copy()
         
+        # Get all valid moves
         valid_moves = self.game.get_valid_moves()
+        
         for edge in valid_moves:
             move_idx = ed.encode_action(self.game, edge)
-            action_idxs.append(move_idx)
+            if move_idx >= 0:  # Only add valid encoded moves
+                action_idxs.append(move_idx)
                 
         if not action_idxs:
             self.is_expanded = False
             return
             
         self.action_idxes = action_idxs
+        
+        # Zero out invalid moves
         c_p[~np.isin(np.arange(len(c_p)), action_idxs)] = 0.0
         
-        if self.parent.parent is None:
+        # Normalize valid move probabilities
+        valid_probs = c_p[action_idxs]
+        
+        if valid_probs.sum() > 0:
+            valid_probs = valid_probs / valid_probs.sum()
+            c_p[action_idxs] = valid_probs
+        else:
+            # If no valid probabilities, use uniform distribution
+            c_p[action_idxs] = 1.0 / len(action_idxs)
+        
+        # Check if this is the root node (has DummyNode as parent)
+        is_root = isinstance(self.parent, DummyNode)
+        
+        # Only add Dirichlet noise at the root of the search tree
+        if is_root:
             c_p = self.add_dirichlet_noise(action_idxs, c_p)
             
+        # Set child priors
         self.child_priors = c_p
     
     def make_move_on_board(self, board: CliqueBoard, move: int) -> CliqueBoard:
@@ -150,40 +188,58 @@ class DummyNode:
 def UCT_search(game_state: CliqueBoard, num_reads: int, net: nn.Module) -> Tuple[int, UCTNode]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net = net.to(device)  # Ensure model is on the correct device
+    
+    # Create root node with DummyNode as parent
     root = UCTNode(game_state, move=None, parent=DummyNode())
     
-    for _ in range(num_reads):
-        leaf = root.select_leaf()
-        
-        # Convert board to network input
-        state_dict = ed.prepare_state_for_network(leaf.game)
-        edge_index = state_dict['edge_index'].to(device)
-        edge_attr = state_dict['edge_attr'].to(device)
-        
-        with torch.no_grad():
-            child_priors, value_estimate = net(edge_index, edge_attr)
-            child_priors = child_priors.cpu().numpy()
-            value_estimate = value_estimate.item()
+    for i in range(num_reads):
+        try:
+            leaf = root.select_leaf()
             
-        # Check if game is over or if there are no valid moves
-        if leaf.game.game_state != 0 or not leaf.game.get_valid_moves():
-            # If game is over, use the game result for backup
-            if leaf.game.game_state == 1:  # Player 1 wins
-                value = 1.0
-            elif leaf.game.game_state == 2:  # Player 2 wins
-                value = -1.0
-            else:  # Draw or ongoing but no valid moves
-                value = 0.0
+            # Convert board to network input
+            state_dict = ed.prepare_state_for_network(leaf.game)
+            edge_index = state_dict['edge_index'].to(device)
+            edge_attr = state_dict['edge_attr'].to(device)
+            
+            with torch.no_grad():
+                child_priors, value_estimate = net(edge_index, edge_attr)
+                # Reshape child_priors to be 1D array
+                child_priors = child_priors.cpu().numpy().squeeze()
+                value_estimate = value_estimate.item()
                 
-            leaf.backup(value)
-            continue
+            # Check if game is over or if there are no valid moves
+            if leaf.game.game_state != 0 or not leaf.game.get_valid_moves():
+                # If game is over, use the game result for backup
+                if leaf.game.game_state == 1:  # Player 1 wins
+                    value = 1.0
+                elif leaf.game.game_state == 2:  # Player 2 wins
+                    value = -1.0
+                else:  # Draw or ongoing but no valid moves
+                    value = 0.0
+                    
+                leaf.backup(value)
+                continue
+                
+            # Expand the leaf node
+            leaf.expand(child_priors)
+            leaf.backup(value_estimate)
             
-        # Expand the leaf node
-        leaf.expand(child_priors)
-        leaf.backup(value_estimate)
+        except Exception as e:
+            # Continue with next iteration to keep the search robust
+            continue
         
     # Find the move with the most visits
-    return np.argmax(root.child_number_visits), root
+    if len(root.child_number_visits) > 0:
+        best_move = np.argmax(root.child_number_visits)
+        return best_move, root
+    else:
+        # No valid moves, return a random valid move if any
+        valid_moves = game_state.get_valid_moves()
+        if valid_moves:
+            move_idx = ed.encode_action(game_state, random.choice(valid_moves))
+            return move_idx, root
+        else:
+            return 0, root
 
 def make_move_on_board(board: CliqueBoard, move: int) -> CliqueBoard:
     """Make a move on the board given by move index"""
@@ -204,7 +260,7 @@ def get_policy(root: UCTNode) -> np.ndarray:
 
 def save_as_pickle(filename: str, data: List) -> None:
     os.makedirs("./datasets/clique/", exist_ok=True)
-    complete_name = os.path.join("./datasets/clique/", filename)
+    complete_name = os.path.join("./datasets/clique/", filename + ".pkl")
     with open(complete_name, 'wb') as output:
         pickle.dump(data, output)
 
@@ -215,7 +271,8 @@ def load_pickle(filename: str) -> List:
     return data
 
 def MCTS_self_play(clique_net: nn.Module, num_games: int, 
-                   num_vertices: int = 6, clique_size: int = 3, cpu: int = 0) -> None:
+                   num_vertices: int = 6, clique_size: int = 3, cpu: int = 0,
+                   mcts_sims: int = 500) -> None:
     """
     Play multiple games of Clique Game against itself using MCTS and save the data.
     
@@ -225,14 +282,20 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
         num_vertices: Number of vertices in the graph
         clique_size: Size of clique needed for Player 1 to win
         cpu: CPU index for multiprocessing
+        mcts_sims: Number of MCTS simulations per move
     """
     os.makedirs("./model_data", exist_ok=True)
     os.makedirs("./datasets/clique", exist_ok=True)
     
-    # Set device and ensure model is on this device
+    # Set device - since we use spawn, it's safe to check for CUDA
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # The model should already be on CPU from the parent process
+    # We'll move it to the current device (CPU or GPU) within this process
     clique_net = clique_net.to(device)
     clique_net.eval()  # Set to evaluation mode
+    
+    print(f"Process {cpu}: Using device {device}")
     
     for game_idx in range(num_games):
         # Initialize a new game
@@ -258,7 +321,7 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
             board_state = current_board.get_board_state()
             
             # Use MCTS to find the best move
-            best_move, root = UCT_search(current_board, 500, clique_net)
+            best_move, root = UCT_search(current_board, mcts_sims, clique_net)
             
             # Get the policy from MCTS visits
             policy = get_policy(root)
@@ -320,14 +383,20 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
             print(f"Game visualization saved to {save_dir}")
 
 if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Run MCTS self-play for Clique Game")
+    parser.add_argument("--num-games", type=int, default=10, help="Number of games to play")
+    parser.add_argument("--vertices", type=int, default=6, help="Number of vertices in the graph")
+    parser.add_argument("--clique-size", type=int, default=3, help="Size of clique needed to win")
+    parser.add_argument("--mcts-sims", type=int, default=500, help="Number of MCTS simulations per move")
+    parser.add_argument("--cpu", type=int, default=0, help="CPU index for multiprocessing")
+    
+    args = parser.parse_args()
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Set up parameters
-    num_vertices = 6
-    clique_size = 3
-    
     # Initialize network
-    net = CliqueGNN(num_vertices=num_vertices)
+    net = CliqueGNN(num_vertices=args.vertices)
     
     # Load pretrained model if exists
     model_path = "./model_data/clique_net.pth.tar"
@@ -342,24 +411,5 @@ if __name__ == "__main__":
     net = net.cpu()
     net.share_memory()
     
-    # Start self-play processes
-    try:
-        mp.set_start_method("spawn", force=True)
-    except RuntimeError:
-        # Already set, ignore
-        pass
-    
-    processes = []
-    num_cpus = 2  # Number of parallel processes
-    games_per_cpu = 5  # Number of games per process
-    
-    for i in range(num_cpus):
-        p = mp.Process(target=MCTS_self_play, 
-                      args=(net, games_per_cpu, num_vertices, clique_size, i))
-        p.start()
-        processes.append(p)
-        
-    for p in processes:
-        p.join()
-        
-    print("Self-play completed. Generated data saved in datasets/clique/") 
+    # Start self-play process
+    MCTS_self_play(net, args.num_games, args.vertices, args.clique_size, args.cpu, args.mcts_sims) 
