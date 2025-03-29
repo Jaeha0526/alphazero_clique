@@ -1,125 +1,98 @@
-# AlphaZero_Chess
-# From-scratch implementation of AlphaZero for Chess
+# AlphaZero Clique Game
 
-This repo demonstrates an implementation of AlphaZero framework for Chess, using python and PyTorch.
-
-We all know that AlphaGo, created by DeepMind, created a big stir when it defeated reigning world champion Lee Sedol 4-1 in the game of Go in 2016, hence becoming the first computer program to achieve superhuman performance in an ultra-complicated game. 
-
-However, AlphaGoZero, published (https://www.nature.com/articles/nature24270) a year later in 2017, push boundaries one big step further by achieving a similar feat without any human data inputs. A subsequent paper (https://arxiv.org/abs/1712.01815) released by the same group DeepMind successfully applied the same reinforcement learning + supervised learning framework to chess, outperforming the previous best chess program Stockfish after just 4 hours of training.
-
-Inspired by the power of such supervised reinforcement learning models, I created a repository to build my own chess AI program from scratch, closely following the methods as described in the papers above.
-
-# Contents
-In this repository, you will find the following core scripts:
-
-1) MCTS_chess.py - implements the Monte-Carlo Tree Search (MCTS) algorithm based on Polynomial Upper Confidence Trees (PUCT) method for leaf transversal. This generates datasets (state, policy, value) for neural network training
-
-2) alpha_net.py - PyTorch implementation of the AlphaGoZero neural network architecture, with slightly reduced number of residual blocks (19) and convolution channels (256) for faster computation. The network consists of, in order:
-- A convolution block with batch normalization
-- 19 residual blocks with each block consisting of two convolutional layers with batch normalization
-- An output block with two heads: a policy output head that consists of convolutional layer with batch normalization followed by logsoftmax, and a value head that consists of a convolutional layer with relu and tanh activation.
-
-3) chess_board.py - Implementation of a chess board python class with all game rules and possible moves
-
-4) encoder_decoder.py - list of functions to encode/decode chess board class for input/interpretation into neural network, as well as encode/decode the action policy output from neural network
-
-5) evaluator.py - arena class to pit current neural net against the neural net from previous iteration, and keeps the neural net that wins the most games
-
-6) train.py - function to start the neural network training process
-
-7) train_multiprocessing.py - multiprocessing version of train.py
-
-8) pipeline.py - script to starts a sequential iteration pipeline consisting of MCTS search to generate data and neural network training. The evaluator arena function is temporarily excluded here during the early stages of training the neural network.
-
-9) visualize_board.py - miscellaneous function to visualize the chessboard in a more attractive way
-
-10) analyze_games.py - miscellaneous script to visualize and save the chess games
-
-# Iteration pipeline
-
-A full iteration pipeline consists of:
-1) Self-play using MCTS (MCTS_chess.py) to generate game datasets (game state, policy, value), with the neural net guiding the search by providing the prior probabilities in the PUCT algorithm
-
-2) Train the neural network (train.py) using the (game state, policy, value) datasets generated from MCTS self-play
-
-3) Evaluate (evaluator.py) the trained neural net (at predefined checkpoints) by pitting it against the neural net from the previous iteration, again using MCTS guided by the respective neural nets, and keep only the neural net that performs better.
-
-4) Rinse and repeat. Note that in the paper, all these processes are running simultaneously in parallel, subject to available computing resources one has.
-
-# How to play
-1) Run pipeline.py to start the MCTS search and neural net training process. Change the folder and net saved names accordingly. Note that for the first time, you will need to create and save a random, initialized alpha_net for loading. Multiprocessing is enabled, which shares the PyTorch net model in a single CUDA GPU across 6 CPUs workers each running a MCTS self-play.
-
-OR
-
-1) Run the MCTS_chess.py to generate self-play datasets. Note that for the first time, you will need to create and save a random, initialized alpha_net for loading. Multiprocessing is enabled, which shares the PyTorch net model in a single CUDA GPU across 6 CPUs workers each running a MCTS self-play. 
-
-2) Run train.py to train the alpha_net with the datasets.
-
-3) At predetermined checkpoints, run evaluator.py to evaluate the trained net against the neural net from previous iteration. Saves the neural net that performs better. Multiprocessing is enabled, which shares the PyTorch net model in a single CUDA GPU across 6 CPUs workers each running a MCTS self-play. 
-
-4) Repeat for next iteration.
-
-# Interactive Clique Game
-
-This is an interactive implementation of the Clique Game where:
-- Player 1 tries to form a k-clique (a complete subgraph of k vertices)
-- Player 2 tries to prevent Player 1 from forming a k-clique
-
-## Rules
-
-1. The game is played on a complete graph with N vertices.
-2. Players take turns selecting edges.
-3. Player 1 wins by forming a k-clique (a set of k vertices where all possible edges between them are selected by Player 1).
-4. Player 2 wins by preventing Player 1 from forming a k-clique (either by selecting edges that would be part of a potential k-clique, or by playing until no more moves are possible).
+This project implements the AlphaZero algorithm for the Clique Game, using Graph Neural Networks and Monte Carlo Tree Search.
 
 ## Installation
 
-1. Clone this repository
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/alphazero_clique.git
+cd alphazero_clique
+```
+
 2. Install the required dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
+```bash
+pip install -r requirements.txt
+```
 
-## Running the Game
+The requirements.txt file includes the following key dependencies:
+- numpy>=1.19.5: For numerical computations
+- matplotlib>=3.5.1: For visualization
+- networkx>=2.6.3: For graph operations
+- flask>=2.0.1: For web interface
+- torch>=2.0.0: For deep learning
+- torchvision>=0.15.0: For computer vision utilities
+- tqdm>=4.65.0: For progress bars
+- torch-geometric>=2.0.4: For graph neural networks
+- pandas>=1.3.5: For data manipulation
 
-1. From the project root directory, run:
-   ```
-   python src/interactive_clique_game.py
-   ```
-2. Open a web browser and navigate to `http://localhost:8080`
+## Testing the Game
 
-## How to Play
+To test the Clique Game with an interactive web interface:
 
-1. Select the number of vertices (N) and the clique size (k) needed to win
-2. Click "New Game" to start
-3. Click on any available edge from the "Valid Moves" list to make a move
-4. The game board will update to show the current state
-5. The game continues until one player wins
+```bash
+python src/interactive_clique_game.py
+```
 
-## Game Information
+This will:
+1. Start a Flask web server
+2. Open your default web browser to `http://localhost:8080`
+3. Allow you to:
+   - Select the number of vertices (N) and clique size (k)
+   - Start a new game
+   - Make moves by clicking on available edges
+   - View game state, move history, and valid moves
+   - See the game board with colored edges (blue for Player 1, red for Player 2)
 
-- Player 1's edges are shown in blue
-- Player 2's edges are shown in red
-- Unselected edges are shown in gray
-- The current player, move count, and game state are displayed in the Game Info panel
-- A history of moves is shown in the Move History panel
+## Running the AlphaZero Pipeline
 
-## Customization
+To train the model using the AlphaZero pipeline:
 
-You can customize the game parameters:
-- Number of vertices (3-10)
-- Clique size (k) needed for Player 1 to win (2 to N)
-
-## Requirements
-
-- Python 3.6+
-- Flask 2.0.1+
-- NumPy 1.19.5+
-- Matplotlib 3.5.1+
-- NetworkX 2.6.3+
-
-# Clique game
-
-'''bash
+```bash
 python src/pipeline_clique.py --mode pipeline --vertices 6 --clique-size 3 --iterations 3 --self-play-games 2 --mcts-sims 50 --eval-threshold 0.55
-'''
+```
+
+This command runs the full AlphaZero training pipeline with the following parameters:
+- `--mode pipeline`: Runs the complete AlphaZero training pipeline
+- `--vertices 6`: Sets the number of vertices in the graph to 6
+- `--clique-size 3`: Sets the required clique size for Player 1 to win to 3
+- `--iterations 3`: Runs 3 training iterations
+- `--self-play-games 2`: Plays 2 self-play games per iteration
+- `--mcts-sims 50`: Uses 50 Monte Carlo Tree Search simulations per move
+- `--eval-threshold 0.55`: Updates the best model if win rate exceeds 55%
+
+The pipeline will:
+1. Create necessary directories for model data and datasets
+2. Run multiple iterations of:
+   - Self-play games to generate training data
+   - Neural network training on collected examples
+   - Model evaluation against the best model
+3. Save the best model in `./model_data/`
+4. Store training examples in `./datasets/clique/`
+
+## Project Structure
+
+```
+alphazero_clique/
+├── src/
+│   ├── pipeline_clique.py      # Main AlphaZero pipeline
+│   ├── interactive_clique_game.py  # Web interface
+│   ├── alpha_net_clique.py     # Neural network architecture
+│   ├── clique_board.py         # Game board implementation
+│   ├── MCTS_clique.py          # Monte Carlo Tree Search
+│   └── train_clique.py         # Training utilities
+├── requirements.txt            # Project dependencies
+└── README.md                   # Project documentation
+```
+
+## Game Rules
+
+The Clique Game is played on an undirected graph with N vertices:
+1. Players take turns adding edges to the graph
+2. Player 1 wins by creating a clique of size k
+3. Player 2 wins by preventing Player 1 from creating a k-clique
+4. The game ends when either player wins or the graph is complete
+
+## License
+
+[Add your license information here]
