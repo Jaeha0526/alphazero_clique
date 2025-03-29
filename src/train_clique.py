@@ -8,7 +8,7 @@ import torch.multiprocessing as mp
 from alpha_net_clique import CliqueGNN
 import pickle
 import glob
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import matplotlib.pyplot as plt
 import datetime
 import time
@@ -56,7 +56,7 @@ def load_examples(folder_path: str, iteration: int = None) -> List:
     print(f"Loaded {len(all_examples)} examples")
     return all_examples
 
-def train_network(all_examples: List, iteration: int, num_vertices: int, clique_size: int, model_dir: str) -> None:
+def train_network(all_examples: List, iteration: int, num_vertices: int, clique_size: int, model_dir: str) -> Tuple[float, float]:
     """
     Train the network on the given examples.
     
@@ -66,6 +66,9 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
         num_vertices: Number of vertices in the graph
         clique_size: Size of clique needed to win
         model_dir: Directory to save models
+        
+    Returns:
+        Tuple of (avg_policy_loss, avg_value_loss) from validation
     """
     # Split examples into training and validation sets
     train_size = int(0.9 * len(all_examples))
@@ -77,12 +80,21 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     # Initialize network
     net = CliqueGNN(num_vertices, clique_size)
     
-    # Load previous model if exists
-    model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar"
-    if os.path.exists(model_path):
-        checkpoint = torch.load(model_path)
+    # Load model from previous iteration
+    prev_model_path = f"{model_dir}/clique_net_iter{iteration-1}.pth.tar"
+    if iteration > 0 and os.path.exists(prev_model_path):
+        checkpoint = torch.load(prev_model_path)
         net.load_state_dict(checkpoint['state_dict'])
-        print(f"Loaded model from {model_path}")
+        print(f"Loaded model from previous iteration: {prev_model_path}")
+    else:
+        # For first iteration, try to load best model if exists
+        best_model_path = f"{model_dir}/clique_net.pth.tar"
+        if os.path.exists(best_model_path):
+            checkpoint = torch.load(best_model_path)
+            net.load_state_dict(checkpoint['state_dict'])
+            print(f"Loaded best model from {best_model_path}")
+        else:
+            print("No previous model found, starting from scratch")
     
     # Train the network
     print("Starting training...")
@@ -151,10 +163,15 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
         print(f"Validation Value Loss: {avg_value_loss:.4f}")
     else:
         print("No valid examples for validation!")
+        avg_policy_loss = 0.0
+        avg_value_loss = 0.0
     
     # Save the trained model
+    model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar"
     torch.save({'state_dict': net.state_dict()}, model_path)
     print(f"Model saved to {model_path}")
+    
+    return avg_policy_loss, avg_value_loss
 
 def train_pipeline(iterations: int = 5, num_vertices: int = 6, data_dir: str = "./datasets/clique", model_dir: str = "./model_data", clique_size: int = 3) -> None:
     """

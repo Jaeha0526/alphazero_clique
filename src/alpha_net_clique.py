@@ -368,8 +368,21 @@ class CliqueGNN(nn.Module):
         self.to(device)
         self.train()
         
-        optimizer = optim.Adam(self.parameters(), lr=0.001)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+        # Initialize optimizer with learning rate scheduler
+        initial_lr = 0.001
+        min_lr = 0.00001  # Minimum learning rate
+        optimizer = optim.Adam(self.parameters(), lr=initial_lr)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, 
+            mode='min', 
+            factor=0.5, 
+            patience=5, 
+            verbose=True,
+            min_lr=min_lr  # Set minimum learning rate
+        )
+        
+        print(f"Initial learning rate: {initial_lr}")
+        print(f"Minimum learning rate: {min_lr}")
         
         # Create dataset and dataloader
         train_dataset = CliqueGameData(train_examples)
@@ -377,8 +390,6 @@ class CliqueGNN(nn.Module):
         # Use a fixed batch size that divides evenly into the dataset size
         dataset_size = len(train_dataset)
         batch_size = min(16, dataset_size)
-        while dataset_size % batch_size != 0:
-            batch_size -= 1
         print(f"Using batch size: {batch_size} (dataset size: {dataset_size})")
         
         train_loader = PyGDataLoader(
@@ -406,17 +417,6 @@ class CliqueGNN(nn.Module):
                     
                     # Forward pass with batch assignment
                     policy_output, value_output = self(batch.edge_index, batch.edge_attr, batch_assignment)
-                    
-                    # # Debug information
-                    # if batch_idx == 0:
-                    #     print(f"\nBatch shapes:")
-                    #     print(f"  Edge index: {batch.edge_index.shape}")
-                    #     print(f"  Edge attr: {batch.edge_attr.shape}")
-                    #     print(f"  Policy output: {policy_output.shape}")
-                    #     print(f"  Policy target: {batch.policy.shape}")
-                    #     print(f"  Value output: {value_output.shape}")
-                    #     print(f"  Value target: {batch.value.shape}")
-                    #     print(f"  Batch assignment: {batch_assignment.shape}")
                     
                     # Reshape policy target to match output shape
                     num_graphs = len(torch.unique(batch_assignment))
@@ -447,9 +447,6 @@ class CliqueGNN(nn.Module):
                     total_policy_loss += policy_loss.item()
                     total_value_loss += value_loss.item()
                     num_batches += 1
-                    
-                    if (batch_idx + 1) % 10 == 0:
-                        print(f"Batch {batch_idx+1}/{len(train_loader)}, Loss: {loss.item():.4f}")
                         
                 except RuntimeError as e:
                     print(f"Error in batch {batch_idx}: {e}")
@@ -471,26 +468,16 @@ class CliqueGNN(nn.Module):
             
             # Update learning rate
             scheduler.step(avg_loss)
+            current_lr = optimizer.param_groups[0]['lr']
             
             # Print progress
-            if (i + 1) % 10 == 0 or i == 0:
+            if (i + 1) % 50 == 0 or i == 0:
                 print(f"\nIteration {i+1}/{num_iterations}")
                 print(f"Average Loss: {avg_loss:.4f}")
                 print(f"Policy Loss: {avg_policy_loss:.4f}")
                 print(f"Value Loss: {avg_value_loss:.4f}")
-                print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
+                print(f"Learning Rate: {current_lr:.6f}")
                 print("-" * 50)
-            
-            # Save model periodically
-            if (i + 1) % save_interval == 0:
-                self.save_model(i + 1)
-
-    def save_model(self, iteration):
-        """Save the model to a file."""
-        os.makedirs("./model_data", exist_ok=True)
-        model_path = f"./model_data/clique_net_iter{iteration}.pth.tar"
-        torch.save({'state_dict': self.state_dict()}, model_path)
-        print(f"Model saved to {model_path}")
 
 class CliqueAlphaLoss(nn.Module):
     def __init__(self):

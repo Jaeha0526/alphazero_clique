@@ -10,6 +10,7 @@ from typing import List, Dict, Any
 import matplotlib.pyplot as plt
 import pickle
 import glob
+import json
 
 from clique_board import CliqueBoard
 from alpha_net_clique import CliqueGNN
@@ -202,7 +203,7 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     
     # Train on current iteration's examples
     print("Training on examples")
-    train_network(all_examples, iteration, num_vertices, clique_size, model_dir)
+    avg_policy_loss, avg_value_loss = train_network(all_examples, iteration, num_vertices, clique_size, model_dir)
     
     # Save current model
     os.makedirs(model_dir, exist_ok=True)
@@ -211,6 +212,10 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     # Evaluate against best model
     print("=== Starting evaluation ===")
     best_model_path = f"{model_dir}/clique_net.pth.tar"
+    
+    # Initialize win rate for first iteration
+    win_rate = 1.0 if not os.path.exists(best_model_path) else 0.0
+    
     if os.path.exists(best_model_path):
         best_model = CliqueGNN(num_vertices, clique_size).to(device)
         checkpoint = torch.load(best_model_path, map_location=device)
@@ -223,14 +228,60 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
                                  num_mcts_sims=mcts_sims, game_mode=game_mode)
         
         print(f"Evaluation win rate: {win_rate:.2f}")
-        
-        # Update best model if current model is better
-        if win_rate > eval_threshold:
-            print(f"Current model is better (win rate: {win_rate:.2f} > {eval_threshold})")
-            torch.save({'state_dict': current_model.state_dict()}, best_model_path)
+    
+    # Ensure model directory exists
+    os.makedirs(model_dir, exist_ok=True)
+    
+    # Load existing experiment log or create new one
+    experiment_log_file = os.path.join(model_dir, "experiment_log.json")
+    if os.path.exists(experiment_log_file):
+        with open(experiment_log_file, 'r') as f:
+            experiment_log = json.load(f)
     else:
-        print("No best model exists, saving current model as best")
+        experiment_log = {
+            'experiment_info': {
+                'num_vertices': num_vertices,
+                'clique_size': clique_size,
+                'mcts_sims': mcts_sims,
+                'num_cpus': num_cpus,
+                'game_mode': game_mode,
+                'start_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            },
+            'iterations': []
+        }
+    
+    # Add current iteration results
+    iteration_results = {
+        'iteration': iteration,
+        'win_rate': win_rate,
+        'num_examples': len(all_examples),
+        'num_self_play_games': num_self_play_games,
+        'mcts_sims': mcts_sims,
+        'game_mode': game_mode,
+        'validation_metrics': {
+            'policy_loss': avg_policy_loss,
+            'value_loss': avg_value_loss
+        }
+    }
+    
+    # Append iteration results
+    experiment_log['iterations'].append(iteration_results)
+    
+    # Save updated experiment log
+    with open(experiment_log_file, 'w') as f:
+        json.dump(experiment_log, f, indent=4)
+    
+    print(f"Experiment log saved to {experiment_log_file}")
+    
+    # If current model is better or no best model exists, update best model
+    if win_rate > eval_threshold or not os.path.exists(best_model_path):
+        print(f"Current model is better (win rate: {win_rate:.2f} > {eval_threshold:.2f})")
+        print("Updating best model...")
         torch.save({'state_dict': current_model.state_dict()}, best_model_path)
+        print("Best model updated")
+    else:
+        print(f"Current model is not better (win rate: {win_rate:.2f} <= {eval_threshold:.2f})")
+        print("Keeping best model")
 
 def run_pipeline(iterations: int = 5, self_play_games: int = 10, 
                 num_vertices: int = 6, clique_size: int = 3,
