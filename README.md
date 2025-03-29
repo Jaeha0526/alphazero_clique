@@ -19,21 +19,21 @@ In this repository, you will find the following core scripts:
 - 19 residual blocks with each block consisting of two convolutional layers with batch normalization
 - An output block with two heads: a policy output head that consists of convolutional layer with batch normalization followed by logsoftmax, and a value head that consists of a convolutional layer with relu and tanh activation.
 
-3) chess_board.py � Implementation of a chess board python class with all game rules and possible moves
+3) chess_board.py - Implementation of a chess board python class with all game rules and possible moves
 
-4) encoder_decoder.py � list of functions to encode/decode chess board class for input/interpretation into neural network, as well as encode/decode the action policy output from neural network
+4) encoder_decoder.py - list of functions to encode/decode chess board class for input/interpretation into neural network, as well as encode/decode the action policy output from neural network
 
-5) evaluator.py � arena class to pit current neural net against the neural net from previous iteration, and keeps the neural net that wins the most games
+5) evaluator.py - arena class to pit current neural net against the neural net from previous iteration, and keeps the neural net that wins the most games
 
-6) train.py � function to start the neural network training process
+6) train.py - function to start the neural network training process
 
-7) train_multiprocessing.py � multiprocessing version of train.py
+7) train_multiprocessing.py - multiprocessing version of train.py
 
-8) pipeline.py � script to starts a sequential iteration pipeline consisting of MCTS search to generate data and neural network training. The evaluator arena function is temporarily excluded here during the early stages of training the neural network.
+8) pipeline.py - script to starts a sequential iteration pipeline consisting of MCTS search to generate data and neural network training. The evaluator arena function is temporarily excluded here during the early stages of training the neural network.
 
-9) visualize_board.py � miscellaneous function to visualize the chessboard in a more attractive way
+9) visualize_board.py - miscellaneous function to visualize the chessboard in a more attractive way
 
-10) analyze_games.py � miscellaneous script to visualize and save the chess games
+10) analyze_games.py - miscellaneous script to visualize and save the chess games
 
 # Iteration pipeline
 
@@ -59,6 +59,64 @@ OR
 
 4) Repeat for next iteration.
 
+# Interactive Clique Game
+
+This is an interactive implementation of the Clique Game where:
+- Player 1 tries to form a k-clique (a complete subgraph of k vertices)
+- Player 2 tries to prevent Player 1 from forming a k-clique
+
+## Rules
+
+1. The game is played on a complete graph with N vertices.
+2. Players take turns selecting edges.
+3. Player 1 wins by forming a k-clique (a set of k vertices where all possible edges between them are selected by Player 1).
+4. Player 2 wins by preventing Player 1 from forming a k-clique (either by selecting edges that would be part of a potential k-clique, or by playing until no more moves are possible).
+
+## Installation
+
+1. Clone this repository
+2. Install the required dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+
+## Running the Game
+
+1. From the project root directory, run:
+   ```
+   python src/interactive_clique_game.py
+   ```
+2. Open a web browser and navigate to `http://localhost:8080`
+
+## How to Play
+
+1. Select the number of vertices (N) and the clique size (k) needed to win
+2. Click "New Game" to start
+3. Click on any available edge from the "Valid Moves" list to make a move
+4. The game board will update to show the current state
+5. The game continues until one player wins
+
+## Game Information
+
+- Player 1's edges are shown in blue
+- Player 2's edges are shown in red
+- Unselected edges are shown in gray
+- The current player, move count, and game state are displayed in the Game Info panel
+- A history of moves is shown in the Move History panel
+
+## Customization
+
+You can customize the game parameters:
+- Number of vertices (3-10)
+- Clique size (k) needed for Player 1 to win (2 to N)
+
+## Requirements
+
+- Python 3.6+
+- Flask 2.0.1+
+- NumPy 1.19.5+
+- Matplotlib 3.5.1+
+- NetworkX 2.6.3+
 
 # Clique game
 

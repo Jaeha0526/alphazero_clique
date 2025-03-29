@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Clique Game</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css">
+    <style>
+        .game-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .board-container {
+            text-align: center;
+            margin: 20px 0;
+            position: relative;
+        }
+        .game-board {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .game-info {
+            margin-bottom: 20px;
+        }
+        .move-history {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .edge-list {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .edge-item {
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .edge-item:hover {
+            background-color: #f0f0f0;
+        }
+        .player1 {
+            color: blue;
+        }
+        .player2 {
+            color: red;
+        }
+        .game-mode-info {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(255, 255, 255, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            display: none;
+        }
+        .click-feedback {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background-color: rgba(255, 255, 0, 0.5);
+            border-radius: 50%;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            z-index: 50;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1 class="text-center mb-4">Interactive Clique Game</h1>
+        
+        <div class="row">
+            <div class="col-md-8">
+                <!-- Game Board -->
+                <div class="board-container">
+                    <img id="game-board" class="game-board" src="" alt="Clique Game Board">
+                    <div id="click-feedback" class="click-feedback"></div>
+                    <div id="loading-overlay" class="loading-overlay">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="text-center mt-2">
+                    <div class="form-check form-switch d-inline-block">
+                        <input class="form-check-input" type="checkbox" id="click-mode-toggle" checked>
+                        <label class="form-check-label" for="click-mode-toggle">Click-to-move enabled</label>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <!-- Game Controls -->
+                <div class="card mb-3">
+                    <div class="card-header">Game Controls</div>
+                    <div class="card-body">
+                        <div id="setup-controls">
+                            <div class="mb-3">
+                                <label for="num-vertices" class="form-label">Number of Vertices (3-10):</label>
+                                <input type="number" class="form-control" id="num-vertices" min="3" max="10" value="6">
+                            </div>
+                            <div class="mb-3">
+                                <label for="k-value" class="form-label">k (clique size):</label>
+                                <input type="number" class="form-control" id="k-value" min="2" value="3">
+                            </div>
+                            <div class="mb-3">
+                                <label for="game-mode" class="form-label">Game Mode:</label>
+                                <select class="form-select" id="game-mode">
+                                    <option value="asymmetric">Asymmetric</option>
+                                    <option value="symmetric">Symmetric</option>
+                                </select>
+                                <div class="game-mode-info" id="game-mode-info">
+                                    <p><strong>Asymmetric Mode:</strong> Player 1 tries to form a k-clique. Player 2 tries to prevent it.</p>
+                                </div>
+                            </div>
+                            <button id="new-game-btn" class="btn btn-primary">New Game</button>
+                        </div>
+                        
+                        <div id="in-game-controls" class="mt-3">
+                            <button id="reset-game-btn" class="btn btn-secondary" disabled>Reset Game</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Game Info -->
+                <div class="card mb-3">
+                    <div class="card-header">Game Info</div>
+                    <div class="card-body">
+                        <div id="game-info">
+                            <p>Start a new game to begin playing!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row mt-3">
+            <div class="col-md-6">
+                <!-- Valid Moves -->
+                <div class="card">
+                    <div class="card-header">Valid Moves</div>
+                    <div class="card-body">
+                        <div id="valid-moves" class="edge-list">
+                            <p>No valid moves available.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <!-- Move History -->
+                <div class="card">
+                    <div class="card-header">Move History</div>
+                    <div class="card-body">
+                        <div id="move-history" class="move-history">
+                            <p>No moves made yet.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Game state variables
+        let gameId = null;
+        let moveHistory = [];
+        let gameActive = false;
+        let gameMode = "asymmetric";
+        let edgePositions = [];
+        let boardWidth = 0;
+        let boardHeight = 0;
+        let clickModeEnabled = true;
+        
+        // DOM Elements
+        const gameBoard = document.getElementById('game-board');
+        const validMovesContainer = document.getElementById('valid-moves');
+        const moveHistoryContainer = document.getElementById('move-history');
+        const gameInfoContainer = document.getElementById('game-info');
+        const newGameBtn = document.getElementById('new-game-btn');
+        const resetGameBtn = document.getElementById('reset-game-btn');
+        const numVerticesInput = document.getElementById('num-vertices');
+        const kValueInput = document.getElementById('k-value');
+        const gameModeSelect = document.getElementById('game-mode');
+        const gameModeInfo = document.getElementById('game-mode-info');
+        const clickModeToggle = document.getElementById('click-mode-toggle');
+        const clickFeedback = document.getElementById('click-feedback');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const boardContainer = document.querySelector('.board-container');
+        
+        // Event Listeners
+        newGameBtn.addEventListener('click', startNewGame);
+        resetGameBtn.addEventListener('click', resetGame);
+        numVerticesInput.addEventListener('change', updateKValueMax);
+        gameModeSelect.addEventListener('change', updateGameModeInfo);
+        gameBoard.addEventListener('click', handleBoardClick);
+        clickModeToggle.addEventListener('change', toggleClickMode);
+        gameBoard.addEventListener('load', function() {
+            boardWidth = gameBoard.clientWidth;
+            boardHeight = gameBoard.clientHeight;
+        });
+        
+        // Update k-value max based on num-vertices
+        function updateKValueMax() {
+            const numVertices = parseInt(numVerticesInput.value);
+            kValueInput.max = numVertices;
+            if (parseInt(kValueInput.value) > numVertices) {
+                kValueInput.value = numVertices;
+            }
+        }
+        
+        // Update game mode info based on selection
+        function updateGameModeInfo() {
+            const selectedMode = gameModeSelect.value;
+            
+            if (selectedMode === "asymmetric") {
+                gameModeInfo.innerHTML = '<p><strong>Asymmetric Mode:</strong> Player 1 tries to form a k-clique. Player 2 tries to prevent it.</p>';
+            } else {
+                gameModeInfo.innerHTML = '<p><strong>Symmetric Mode:</strong> Both players try to form a k-clique. First to form one wins.</p>';
+            }
+            
+            gameMode = selectedMode;
+        }
+        
+        // Toggle click mode
+        function toggleClickMode() {
+            clickModeEnabled = clickModeToggle.checked;
+        }
+        
+        // Handle board click
+        async function handleBoardClick(event) {
+            if (!gameActive || !clickModeEnabled) return;
+            
+            // Show loading overlay
+            loadingOverlay.style.display = 'flex';
+            
+            // Get click coordinates relative to the board
+            const rect = gameBoard.getBoundingClientRect();
+            const x = (event.clientX - rect.left) / rect.width;
+            const y = (event.clientY - rect.top) / rect.height;
+            
+            // Show click feedback
+            clickFeedback.style.left = (event.clientX - rect.left) + 'px';
+            clickFeedback.style.top = (event.clientY - rect.top) + 'px';
+            clickFeedback.style.display = 'block';
+            
+            try {
+                // Find the closest edge to the click
+                const response = await fetch('/api/click_edge', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        game_id: gameId,
+                        x: x,
+                        y: y,
+                        edge_positions: edgePositions
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Make a move with the found edge
+                    await makeMove(data.edge[0], data.edge[1]);
+                } else {
+                    console.error('Error finding edge:', data.error);
+                }
+            } catch (error) {
+                console.error('Error handling click:', error);
+            } finally {
+                // Hide loading overlay and click feedback
+                loadingOverlay.style.display = 'none';
+                setTimeout(() => {
+                    clickFeedback.style.display = 'none';
+                }, 300);
+            }
+        }
+        
+        // Start a new game
+        async function startNewGame() {
+            const numVertices = parseInt(numVerticesInput.value);
+            const k = parseInt(kValueInput.value);
+            const gameMode = gameModeSelect.value;
+            
+            try {
+                loadingOverlay.style.display = 'flex';
+                
+                const response = await fetch('/api/new_game', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        num_vertices: numVertices, 
+                        k: k,
+                        game_mode: gameMode
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    gameId = data.game_id;
+                    gameActive = true;
+                    moveHistory = [];
+                    resetGameBtn.disabled = false;
+                    edgePositions = data.edge_positions;
+                    
+                    // Update UI
+                    gameBoard.src = `data:image/png;base64,${data.board_image}`;
+                    updateGameInfo(data);
+                    displayValidMoves(data.valid_moves);
+                    updateMoveHistory();
+                } else {
+                    alert(`Error: ${data.error}`);
+                }
+            } catch (error) {
+                console.error('Error starting new game:', error);
+                alert('Failed to start a new game. See console for details.');
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        }
+        
+        // Make a move
+        async function makeMove(v1, v2) {
+            if (!gameActive) return;
+            
+            try {
+                loadingOverlay.style.display = 'flex';
+                
+                const response = await fetch('/api/make_move', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        game_id: gameId,
+                        edge: [v1, v2]
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Update edge positions
+                    edgePositions = data.edge_positions;
+                    
+                    // Update UI
+                    gameBoard.src = `data:image/png;base64,${data.board_image}`;
+                    updateGameInfo(data);
+                    displayValidMoves(data.valid_moves);
+                    
+                    // Add move to history
+                    const playerNum = data.current_player === 1 ? 2 : 1; // Previous player made the move
+                    moveHistory.push({
+                        player: playerNum,
+                        edge: [v1, v2],
+                        moveNumber: data.move_count
+                    });
+                    updateMoveHistory();
+                    
+                    // Check if game is over
+                    if (data.game_state !== 0) {
+                        gameActive = false;
+                        setTimeout(() => {
+                            let message;
+                            if (data.game_state === 3) {
+                                message = "Game Over! It's a draw!";
+                            } else {
+                                message = `Game Over! Player ${data.game_state} wins!`;
+                            }
+                            alert(message);
+                        }, 100);
+                    }
+                } else {
+                    alert(`Error: ${data.error}`);
+                }
+            } catch (error) {
+                console.error('Error making move:', error);
+                alert('Failed to make move. See console for details.');
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        }
+        
+        // Reset the game
+        async function resetGame() {
+            if (!gameId) return;
+            
+            try {
+                loadingOverlay.style.display = 'flex';
+                
+                const response = await fetch(`/api/reset_game/${gameId}`, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    gameActive = true;
+                    moveHistory = [];
+                    edgePositions = data.edge_positions;
+                    
+                    // Update UI
+                    gameBoard.src = `data:image/png;base64,${data.board_image}`;
+                    updateGameInfo(data);
+                    displayValidMoves(data.valid_moves);
+                    updateMoveHistory();
+                } else {
+                    alert(`Error: ${data.error}`);
+                }
+            } catch (error) {
+                console.error('Error resetting game:', error);
+                alert('Failed to reset game. See console for details.');
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        }
+        
+        // Update game info display
+        function updateGameInfo(data) {
+            let gameState;
+            if (data.game_state === 0) {
+                gameState = 'Ongoing';
+            } else if (data.game_state === 1) {
+                gameState = 'Player 1 Wins!';
+            } else if (data.game_state === 2) {
+                gameState = 'Player 2 Wins!';
+            } else {
+                gameState = 'Draw';
+            }
+            
+            const currentPlayer = data.current_player;
+            const playerColor = currentPlayer === 1 ? 'blue' : 'red';
+            const moveCount = data.move_count;
+            const numVertices = data.num_vertices || numVerticesInput.value;
+            const k = data.k || kValueInput.value;
+            const gameMode = data.game_mode || gameModeSelect.value;
+            
+            let gameModeText = gameMode === 'asymmetric' ? 
+                'Player 1 forms k-clique, Player 2 prevents' : 
+                'Both players try to form k-clique';
+            
+            gameInfoContainer.innerHTML = `
+                <p><strong>Game State:</strong> ${gameState}</p>
+                <p><strong>Current Player:</strong> <span style="color:${playerColor}">Player ${currentPlayer}</span></p>
+                <p><strong>Move Count:</strong> ${moveCount}</p>
+                <p><strong>Vertices:</strong> ${numVertices}</p>
+                <p><strong>k (clique size):</strong> ${k}</p>
+                <p><strong>Game Mode:</strong> ${gameMode.charAt(0).toUpperCase() + gameMode.slice(1)} (${gameModeText})</p>
+            `;
+        }
+        
+        // Display valid moves
+        function displayValidMoves(moves) {
+            if (!moves || moves.length === 0) {
+                validMovesContainer.innerHTML = '<p>No valid moves available.</p>';
+                return;
+            }
+            
+            let html = '';
+            moves.forEach(move => {
+                html += `
+                    <div class="edge-item" onclick="makeMove(${move[0]}, ${move[1]})">
+                        Edge (${move[0]}, ${move[1]})
+                    </div>
+                `;
+            });
+            
+            validMovesContainer.innerHTML = html;
+        }
+        
+        // Update move history display
+        function updateMoveHistory() {
+            if (moveHistory.length === 0) {
+                moveHistoryContainer.innerHTML = '<p>No moves made yet.</p>';
+                return;
+            }
+            
+            let html = '';
+            moveHistory.forEach(move => {
+                const playerClass = move.player === 1 ? 'player1' : 'player2';
+                html += `
+                    <div>
+                        <span class="${playerClass}">Player ${move.player}</span>:
+                        Edge (${move.edge[0]}, ${move.edge[1]})
+                    </div>
+                `;
+            });
+            
+            moveHistoryContainer.innerHTML = html;
+            moveHistoryContainer.scrollTop = moveHistoryContainer.scrollHeight;
+        }
+        
+        // Initialize game mode info on page load
+        updateGameModeInfo();
+    </script>
+</body>
+</html> 
