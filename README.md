@@ -68,7 +68,7 @@ This will:
 To train the model using the AlphaZero pipeline:
 
 ```bash
-python src/pipeline_clique.py --mode pipeline --vertices 6 --clique-size 3 --iterations 3 --self-play-games 2 --mcts-sims 50 --eval-threshold 0.55 --num-cpus 4 --game-mode symmetric
+python src/pipeline_clique.py --mode pipeline --vertices 6 --clique-size 3 --iterations 3 --self-play-games 2 --mcts-sims 50 --eval-threshold 0.55 --num-cpus 4 --game-mode symmetric --experiment-name my_experiment
 ```
 
 This command runs the full AlphaZero training pipeline with the following parameters:
@@ -81,6 +81,7 @@ This command runs the full AlphaZero training pipeline with the following parame
 - `--eval-threshold 0.55`: Updates the best model if win rate exceeds 55%
 - `--num-cpus 4`: Uses 4 CPU cores for parallel processing (default: 4)
 - `--game-mode symmetric`: Sets the game mode (default: "symmetric")
+- `--experiment-name`: Name of the experiment for organizing data and models (default: "default")
 
 ### CPU Usage
 - The default value of 4 CPU cores is optimized for MacBook Air (which typically has 8 cores)
@@ -101,8 +102,8 @@ The pipeline will:
    - Self-play games to generate training data
    - Neural network training on collected examples
    - Model evaluation against the best model
-3. Save the best model in `./model_data/`
-4. Store training examples in `./datasets/clique/`
+3. Save the best model in `./model_data/experiment_name/`
+4. Store training examples in `./datasets/clique/experiment_name/`
 
 ## Project Structure
 

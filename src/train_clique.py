@@ -17,12 +17,13 @@ from torch_geometric.data import DataLoader as PyGDataLoader
 from alpha_net_clique import CliqueGameData
 import torch.nn.functional as F
 
-def load_examples(folder_path: str) -> List:
+def load_examples(folder_path: str, iteration: int = None) -> List:
     """
     Load all example files from a folder.
     
     Args:
         folder_path: Path to the folder containing example files
+        iteration: If provided, only load examples from this iteration
         
     Returns:
         all_examples: List of all examples
@@ -30,8 +31,12 @@ def load_examples(folder_path: str) -> List:
     all_examples = []
     
     # Get all pickle files in the folder
-    pickle_files = glob.glob(os.path.join(folder_path, "*.pkl"))
-    # pickle_files += glob.glob(os.path.join(folder_path, "clique_game_*.pkl"))
+    if iteration is not None:
+        # Only load files from the current iteration
+        pickle_files = glob.glob(os.path.join(folder_path, f"game_*_iter{iteration}.pkl"))
+    else:
+        # Load all files
+        pickle_files = glob.glob(os.path.join(folder_path, "*.pkl"))
     
     if not pickle_files:
         print(f"No training examples found in {folder_path}")
@@ -51,7 +56,7 @@ def load_examples(folder_path: str) -> List:
     print(f"Loaded {len(all_examples)} examples")
     return all_examples
 
-def train_network(all_examples: List, iteration: int, num_vertices: int, clique_size: int) -> None:
+def train_network(all_examples: List, iteration: int, num_vertices: int, clique_size: int, model_dir: str) -> None:
     """
     Train the network on the given examples.
     
@@ -59,6 +64,8 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
         all_examples: List of all training examples
         iteration: Current iteration number
         num_vertices: Number of vertices in the graph
+        clique_size: Size of clique needed to win
+        model_dir: Directory to save models
     """
     # Split examples into training and validation sets
     train_size = int(0.9 * len(all_examples))
@@ -71,7 +78,7 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     net = CliqueGNN(num_vertices, clique_size)
     
     # Load previous model if exists
-    model_path = f"./model_data/clique_net_iter{iteration}.pth.tar"
+    model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar"
     if os.path.exists(model_path):
         checkpoint = torch.load(model_path)
         net.load_state_dict(checkpoint['state_dict'])
@@ -82,7 +89,6 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     # Calculate number of iterations based on dataset size
     # Use 30 epochs with batch size of 16
     num_iterations = max(1, (len(train_examples) // 16) * 30)
-    # num_iterations = 1
     
     # First try training on CPU if we hit CUDA errors
     try:
@@ -150,34 +156,45 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     torch.save({'state_dict': net.state_dict()}, model_path)
     print(f"Model saved to {model_path}")
 
-def train_pipeline(iterations: int = 5, num_vertices: int = 6) -> None:
+def train_pipeline(iterations: int = 5, num_vertices: int = 6, data_dir: str = "./datasets/clique", model_dir: str = "./model_data", clique_size: int = 3) -> None:
     """
     Run the full training pipeline for the given number of iterations.
     
     Args:
         iterations: Number of iterations to run
         num_vertices: Number of vertices in the graph
+        data_dir: Directory containing training data
+        model_dir: Directory to save models
+        clique_size: Size of clique needed to win
     """
     for iteration in range(iterations):
         print(f"Starting iteration {iteration+1}/{iterations}")
         
-        # 1. Load all examples from previous iterations
-        all_examples = []
-        
-        # Get all subdirectories in the datasets folder
-        dataset_dir = "./datasets/clique"
-        if os.path.exists(dataset_dir):
-            all_examples = load_examples(dataset_dir)
-        
-        # If no examples found, generate initial examples
-        if not all_examples:
+        # 1. Load only the current iteration's examples
+        if not os.path.exists(data_dir):
             print("No examples found. Please run MCTS_clique.py first to generate examples.")
             return
+            
+        # Get all pickle files from the current iteration
+        pickle_files = glob.glob(os.path.join(data_dir, f"game_*_iter{iteration}.pkl"))
+        if not pickle_files:
+            print(f"No examples found for iteration {iteration}. Please run MCTS_clique.py first.")
+            return
+            
+        all_examples = []
+        for pickle_file in pickle_files:
+            try:
+                with open(pickle_file, 'rb') as f:
+                    examples = pickle.load(f)
+                    all_examples.extend(examples)
+            except Exception as e:
+                print(f"Error loading {pickle_file}: {e}")
+                continue
         
-        print(f"Loaded {len(all_examples)} examples total")
+        print(f"Loaded {len(all_examples)} examples for iteration {iteration}")
         
-        # 2. Train network on all examples
-        train_network(all_examples, iteration, num_vertices)
+        # 2. Train network on current iteration's examples
+        train_network(all_examples, iteration, num_vertices, clique_size, model_dir)
         
         # 3. Wait before next iteration to allow for self-play
         if iteration < iterations - 1:
@@ -203,4 +220,5 @@ if __name__ == "__main__":
     os.makedirs("./datasets/clique", exist_ok=True)
     
     # Start the training pipeline
+    train_pipeline(args.iterations, args.vertices) 
     train_pipeline(args.iterations, args.vertices) 

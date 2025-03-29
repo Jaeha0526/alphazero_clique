@@ -9,11 +9,12 @@ import numpy as np
 from typing import List, Dict, Any
 import matplotlib.pyplot as plt
 import pickle
+import glob
 
 from clique_board import CliqueBoard
 from alpha_net_clique import CliqueGNN
 from MCTS_clique import MCTS_self_play, UCT_search, get_policy, make_move_on_board
-from train_clique import train_network, load_examples
+from train_clique import train_network, load_examples, train_pipeline
 import encoder_decoder_clique as ed
 
 def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN, 
@@ -98,7 +99,8 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
             # Check for draw - board filled
             if not board.get_valid_moves() and game_mode == "symmetric":
                 game_over = True
-                draws += 1
+                if board.game_state == 0:  # Only count as draw if not already counted
+                    draws += 1
         
         # Print result
         result = "Draw"
@@ -122,7 +124,8 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
 
 def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int, 
                  clique_size: int, mcts_sims: int, eval_threshold: float,
-                 num_cpus: int = 4, game_mode: str = "symmetric") -> None:
+                 num_cpus: int = 4, game_mode: str = "symmetric",
+                 data_dir: str = "./datasets/clique", model_dir: str = "./model_data") -> None:
     """Run one iteration of the AlphaZero pipeline"""
     print(f"=== Starting iteration {iteration} ===")
     
@@ -133,16 +136,23 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     # Initialize model
     current_model = CliqueGNN(num_vertices, clique_size).to(device)
     
-    # Load best model if it exists
-    best_model_path = f"./model_data/clique_net.pth.tar"
-    current_model_path = f"./model_data/clique_net_iter{iteration}.pth.tar"
+    # Load current model from previous iteration if it exists
+    current_model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar"
+    prev_model_path = f"{model_dir}/clique_net_iter{iteration-1}.pth.tar"
     
-    if os.path.exists(best_model_path):
-        print(f"Loading best model from {best_model_path}")
-        checkpoint = torch.load(best_model_path, map_location=device)
+    if iteration > 0 and os.path.exists(prev_model_path):
+        print(f"Loading model from previous iteration: {prev_model_path}")
+        checkpoint = torch.load(prev_model_path, map_location=device)
         current_model.load_state_dict(checkpoint['state_dict'])
     else:
-        print("No best model found, starting from scratch")
+        # For first iteration, try to load best model if exists
+        best_model_path = f"{model_dir}/clique_net.pth.tar"
+        if os.path.exists(best_model_path):
+            print(f"Loading best model from {best_model_path}")
+            checkpoint = torch.load(best_model_path, map_location=device)
+            current_model.load_state_dict(checkpoint['state_dict'])
+        else:
+            print("No previous model found, starting from scratch")
     
     # Make sure model is on CPU before sharing
     current_model = current_model.cpu()
@@ -150,7 +160,7 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     current_model.eval()
     
     # Save current model
-    os.makedirs("./model_data", exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
     torch.save({'state_dict': current_model.state_dict()}, current_model_path)
     
     # Run self-play games in parallel
@@ -170,7 +180,7 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
         # Add remainder games to first process
         games = games_per_cpu + (remainder if i == 0 else 0)
         p = mp.Process(target=MCTS_self_play, 
-                      args=(current_model, games, num_vertices, clique_size, i, mcts_sims, game_mode))
+                      args=(current_model, games, num_vertices, clique_size, i, mcts_sims, game_mode, iteration, data_dir))
         p.start()
         processes.append(p)
     
@@ -180,26 +190,27 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     
     print("Self-play completed")
     
-    # Load all examples from datasets directory
-    print("Loading all examples from datasets")
-    all_examples = load_examples("./datasets/clique")
+    # Load examples from current iteration only
+    print("Loading examples from current iteration")
+    all_examples = load_examples(data_dir, iteration)
     
     if not all_examples:
-        print("No training examples found. Aborting.")
+        print("No training examples found for current iteration. Aborting.")
         return
         
-    print(f"Training on {len(all_examples)} examples")
+    print(f"Training on {len(all_examples)} examples from iteration {iteration}")
     
-    # Train on all examples
+    # Train on current iteration's examples
     print("Training on examples")
-    train_network(all_examples, iteration, num_vertices, clique_size)
+    train_network(all_examples, iteration, num_vertices, clique_size, model_dir)
     
     # Save current model
-    os.makedirs("./model_data", exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
     torch.save({'state_dict': current_model.state_dict()}, current_model_path)
     
     # Evaluate against best model
     print("=== Starting evaluation ===")
+    best_model_path = f"{model_dir}/clique_net.pth.tar"
     if os.path.exists(best_model_path):
         best_model = CliqueGNN(num_vertices, clique_size).to(device)
         checkpoint = torch.load(best_model_path, map_location=device)
@@ -221,49 +232,64 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
         print("No best model exists, saving current model as best")
         torch.save({'state_dict': current_model.state_dict()}, best_model_path)
 
-def run_pipeline(num_iterations: int = 5, num_self_play_games: int = 100,
+def run_pipeline(iterations: int = 5, self_play_games: int = 10, 
                 num_vertices: int = 6, clique_size: int = 3,
-                num_mcts_sims: int = 500, evaluation_threshold: float = 0.55,
-                num_cpus: int = 4, game_mode: str = "symmetric"):
+                mcts_sims: int = 500, num_cpus: int = 1,
+                game_mode: str = "symmetric", experiment_name: str = "default") -> None:
     """
-    Run the complete AlphaZero pipeline for Clique Game.
+    Run the full AlphaZero pipeline for the Clique Game.
     
     Args:
-        num_iterations: Number of iterations to run
-        num_self_play_games: Number of self-play games per iteration
+        iterations: Number of iterations to run
+        self_play_games: Number of self-play games per iteration
         num_vertices: Number of vertices in the graph
-        clique_size: Size of clique needed for Player 1 to win
-        num_mcts_sims: Number of MCTS simulations per move
-        evaluation_threshold: Win rate threshold to update best model
-        num_cpus: Number of CPU cores to use for parallel processing
+        clique_size: Size of clique needed to win
+        mcts_sims: Number of MCTS simulations per move
+        num_cpus: Number of CPUs to use for parallel self-play
         game_mode: "symmetric" or "asymmetric" game mode
+        experiment_name: Name of the experiment for organizing data and models
     """
-    # Create directories
-    os.makedirs("./model_data", exist_ok=True)
-    os.makedirs("./datasets/clique", exist_ok=True)
+    print(f"Starting pipeline with {iterations} iterations")
+    print(f"Self-play games per iteration: {self_play_games}")
+    print(f"Using {num_cpus} CPUs for parallel self-play")
+    print(f"Experiment name: {experiment_name}")
+    
+    # Create experiment-specific directories
+    data_dir = f"./datasets/clique/{experiment_name}"
+    model_dir = f"./model_data/{experiment_name}"
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
     
     # Run iterations
-    for iteration in range(num_iterations):
-        print(f"\n\n*** Starting iteration {iteration+1}/{num_iterations} ***\n")
-        start_time = time.time()
+    for iteration in range(iterations):
+        print(f"\nStarting iteration {iteration+1}/{iterations}")
         
-        # Run iteration
-        run_iteration(iteration, num_self_play_games, num_vertices, 
-                    clique_size, num_mcts_sims, evaluation_threshold,
-                    num_cpus, game_mode)
+        # Run iteration with experiment-specific directories
+        run_iteration(iteration, self_play_games, num_vertices, 
+                     clique_size, mcts_sims, 0.55,  # Using default eval threshold
+                     num_cpus, game_mode, data_dir, model_dir)
         
-        # Print iteration stats
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        print(f"Iteration {iteration} completed in {elapsed_time:.2f}s")
+        # Move files to experiment-specific directories
+        # Move game data
+        for file in glob.glob("./datasets/clique/*.pkl"):
+            if f"_iter{iteration}" in file:
+                new_file = file.replace("./datasets/clique/", f"{data_dir}/")
+                os.rename(file, new_file)
         
-        # Plot learning curve if possible
-        try:
-            plot_learning_curve(iteration+1)
-        except Exception as e:
-            print(f"Error plotting learning curve: {e}")
+        # Move model files
+        for file in glob.glob("./model_data/*.pth.tar"):
+            if f"iter{iteration}" in file or "clique_net.pth.tar" in file:
+                new_file = file.replace("./model_data/", f"{model_dir}/")
+                os.rename(file, new_file)
+        
+        print(f"Iteration {iteration+1} completed")
+        
+        # Wait before next iteration
+        if iteration < iterations - 1:
+            print("Waiting 10 seconds before next iteration...")
+            time.sleep(10)
     
-    print("\nTraining pipeline completed successfully")
+    print("\nPipeline completed successfully!")
 
 def plot_learning_curve(num_iterations: int):
     """
@@ -437,6 +463,8 @@ if __name__ == "__main__":
                       help="Number of self-play games per iteration")
     parser.add_argument("--eval-threshold", type=float, default=0.55,
                       help="Win rate threshold to update best model")
+    parser.add_argument("--experiment-name", type=str, default="default",
+                      help="Name of the experiment for organizing data and models")
     
     # Self-play parameters
     parser.add_argument("--num-games", type=int, default=100,
@@ -459,8 +487,8 @@ if __name__ == "__main__":
     # Run selected mode
     if args.mode == "pipeline":
         run_pipeline(args.iterations, args.self_play_games, args.vertices,
-                   args.clique_size, args.mcts_sims, args.eval_threshold,
-                   args.num_cpus, args.game_mode)
+                   args.clique_size, args.mcts_sims, args.num_cpus, args.game_mode,
+                   args.experiment_name)
     
     elif args.mode == "selfplay":
         # Create model

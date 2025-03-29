@@ -21,15 +21,17 @@ class CliqueGameData(Dataset):
         self.examples = []
         for example in examples:
             try:
-                if len(example) != 3:
-                    print(f"Skipping example: wrong length {len(example)}")
+                if isinstance(example, dict):
+                    board_state = example['board_state']
+                    policy = example['policy']
+                    value = example['value']
+                else:
+                    print(f"Skipping example: wrong format")
                     continue
-                
-                board_state, policy, value = example
                 
                 # Basic validation checks
                 if isinstance(policy, np.ndarray) and isinstance(value, (int, float, np.ndarray)):
-                    self.examples.append(example)
+                    self.examples.append((board_state, policy, value))
                 else:
                     print(f"Skipping example: invalid types - policy: {type(policy)}, value: {type(value)}")
             except Exception as e:
@@ -121,22 +123,19 @@ class CliqueGameData(Dataset):
     
     def _board_to_graph(self, board_state):
         try:
-            # Check what format the board state is in
+            # Check if board_state is already in the correct format
+            if isinstance(board_state, dict) and 'edge_index' in board_state and 'edge_attr' in board_state:
+                return torch.tensor(board_state['edge_index'], dtype=torch.long), \
+                       torch.tensor(board_state['edge_attr'], dtype=torch.float)
+            
+            # If not, try to convert from old format
             if isinstance(board_state, dict):
-                # Try the standard format first
                 if 'edge_states' in board_state and 'num_vertices' in board_state:
                     edge_states = board_state['edge_states']
                     num_vertices = board_state['num_vertices']
-                # For backwards compatibility or different formats
-                elif 'states' in board_state:
-                    edge_states = board_state['states']
-                    num_vertices = edge_states.shape[0]
                 else:
-                    # Print available keys for debugging
-                    print(f"Board state keys: {list(board_state.keys())}")
                     raise KeyError("Required keys not found in board_state")
             else:
-                # If board_state is not a dict but the raw edge states array
                 edge_states = board_state
                 num_vertices = edge_states.shape[0]
             

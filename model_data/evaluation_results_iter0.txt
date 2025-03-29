@@ -1,3 +1,0 @@
-Win rate: 0.3279
-Threshold: 0.5500
-Updated best model: False

@@ -256,131 +256,138 @@ def get_policy(root: UCTNode) -> np.ndarray:
     valid_indices = np.where(root.child_number_visits != 0)[0]
     if len(valid_indices) > 0:
         policy[valid_indices] = root.child_number_visits[valid_indices] / root.child_number_visits.sum()
+    
+    # Apply valid moves mask to ensure only valid moves are considered
+    mask = ed.get_valid_moves_mask(root.game)
+    policy = ed.apply_valid_moves_mask(policy, mask)
+    
     return policy
 
 def save_as_pickle(filename: str, data: List) -> None:
-    os.makedirs("./datasets/clique/", exist_ok=True)
-    complete_name = os.path.join("./datasets/clique/", filename + ".pkl")
-    with open(complete_name, 'wb') as output:
+    """Save data to a pickle file.
+    
+    Args:
+        filename: Full path to the file (including directory)
+        data: Data to save
+    """
+    # Create directory if it doesn't exist
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    
+    # Save the data
+    with open(filename, 'wb') as output:
         pickle.dump(data, output)
 
 def load_pickle(filename: str) -> List:
-    complete_name = os.path.join("./datasets/clique/", filename)
-    with open(complete_name, 'rb') as pkl_file:
+    """Load data from a pickle file.
+    
+    Args:
+        filename: Full path to the file (including directory)
+    """
+    with open(filename, 'rb') as pkl_file:
         data = pickle.load(pkl_file)
     return data
 
 def MCTS_self_play(clique_net: nn.Module, num_games: int, 
                    num_vertices: int = 6, clique_size: int = 3, cpu: int = 0,
-                   mcts_sims: int = 500) -> None:
+                   mcts_sims: int = 500, game_mode: str = "symmetric",
+                   iteration: int = 0, data_dir: str = "./datasets/clique") -> None:
     """
-    Play multiple games of Clique Game against itself using MCTS and save the data.
+    Run self-play games using MCTS and save the games.
     
     Args:
-        clique_net: Neural network model to use for MCTS
+        clique_net: Neural network model
         num_games: Number of games to play
         num_vertices: Number of vertices in the graph
-        clique_size: Size of clique needed for Player 1 to win
+        clique_size: Size of clique needed to win
         cpu: CPU index for multiprocessing
         mcts_sims: Number of MCTS simulations per move
+        game_mode: "symmetric" or "asymmetric" game mode
+        iteration: Current iteration number
+        data_dir: Directory to save game data
     """
-    os.makedirs("./model_data", exist_ok=True)
-    os.makedirs("./datasets/clique", exist_ok=True)
+    print(f"Starting self-play on CPU {cpu} for iteration {iteration}")
     
-    # Set device - since we use spawn, it's safe to check for CUDA
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # The model should already be on CPU from the parent process
-    # We'll move it to the current device (CPU or GPU) within this process
-    clique_net = clique_net.to(device)
-    clique_net.eval()  # Set to evaluation mode
-    
-    print(f"Process {cpu}: Using device {device}")
+    # Create directory for saving games
+    os.makedirs(data_dir, exist_ok=True)
     
     for game_idx in range(num_games):
+        print(f"\nCPU {cpu}: Starting game {game_idx+1}/{num_games}")
+        
         # Initialize a new game
-        current_board = CliqueBoard(num_vertices, clique_size)
+        board = CliqueBoard(num_vertices, clique_size, game_mode)
         game_over = False
-        dataset = []
-        states = []  # Track states to detect repetitions
-        value = 0
         
-        # Store game states for visualization
-        game_states = [current_board.copy()]
+        # Store game states and policies
+        game_states = []
+        policies = []
         
-        print(f"Game {game_idx+1}/{num_games}")
+        # Maximum possible moves
+        max_moves = num_vertices * (num_vertices - 1) // 2
         
-        # Play until game is over or move limit reached
-        max_moves = num_vertices * (num_vertices - 1) // 2  # Max possible moves (all edges)
-        while not game_over and current_board.move_count < max_moves:
-            # Store current state to check for repetitions
-            current_state_str = str(current_board.edge_states)
-            states.append(current_state_str)
+        # Play until game over or max moves reached
+        while not game_over and board.move_count < max_moves:
+            # Print current board state
+            print(f"\nMove {board.move_count + 1}:")
+            print(f"Current player: {'Player 1' if board.player == 0 else 'Player 2'}")
+            print(board)
             
-            # Get current board state
-            board_state = current_board.get_board_state()
+            # Get best move using MCTS
+            best_move, root = UCT_search(board, mcts_sims, clique_net)
             
-            # Use MCTS to find the best move
-            best_move, root = UCT_search(current_board, mcts_sims, clique_net)
-            
-            # Get the policy from MCTS visits
+            # Get policy from root node
             policy = get_policy(root)
             
-            # Store the state and policy
-            dataset.append([board_state, policy])
+            # Store current state and policy
+            game_states.append(board.copy())
+            policies.append(policy)
             
-            # Make the best move
-            current_board = make_move_on_board(current_board, best_move)
-            game_states.append(current_board.copy())
+            # Make the move
+            edge = ed.decode_action(board, best_move)
+            board = make_move_on_board(board, best_move)
             
-            # Print current game state
-            print(f"Move {current_board.move_count}:")
-            print(current_board)
-            edge = ed.decode_action(current_board, best_move)
-            player = "Player 1" if current_board.player == 1 else "Player 2" # Player has already switched
-            print(f"{player} selected edge {edge}")
+            # Print the move made
+            print(f"Selected edge: {edge}")
             
             # Check if game is over
-            if current_board.game_state != 0:
+            if board.game_state != 0:
                 game_over = True
-                if current_board.game_state == 1:  # Player 1 wins
-                    value = 1
+                if board.game_state == 1:
                     print("Player 1 wins!")
-                else:  # Player 2 wins
-                    value = -1
+                elif board.game_state == 2:
                     print("Player 2 wins!")
-            
-            # Check for draw by board filled
-            if not current_board.get_valid_moves():
+                elif board.game_state == 3:
+                    print("Game drawn!")
+            # Check for draw in symmetric mode
+            elif not board.get_valid_moves() and game_mode == "symmetric":
                 game_over = True
-                print("Game drawn - board filled!")
-                
-        # Prepare dataset with values
-        dataset_with_values = []
-        for idx, (s, p) in enumerate(dataset):
-            # Calculate final reward from perspective of the player who made the move
-            player_perspective = 1 if idx % 2 == 1 else -1
-            final_value = value * player_perspective
-            
-            dataset_with_values.append([s, p, final_value])
-            
-        # Save dataset
-        save_as_pickle(
-            f"clique_game_cpu{cpu}_{game_idx}_{datetime.datetime.today().strftime('%Y-%m-%d')}",
-            dataset_with_values
-        )
+                board.game_state = 3  # Set draw state
+                print("Game drawn - no more valid moves!")
         
-        # Visualize and save the game
-        if cpu == 0 and game_idx == 0:  # Only visualize first game on first CPU
-            save_dir = "./model_data/game_visualizations"
-            os.makedirs(save_dir, exist_ok=True)
-            
-            for i, state in enumerate(game_states):
-                fig = view_clique_board(state)
-                plt.savefig(os.path.join(save_dir, f"clique_game_{game_idx}_move_{i}.png"))
-                plt.close(fig)
-            
-            print(f"Game visualization saved to {save_dir}")
+        # Store final state
+        game_states.append(board.copy())
+        
+        # Save all moves from this game in a single file
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        game_examples = []
+        for i in range(len(policies)):
+            # Use prepare_state_for_network to properly format the board state
+            state_dict = ed.prepare_state_for_network(game_states[i])
+            board_state = {
+                'edge_index': state_dict['edge_index'].numpy(),
+                'edge_attr': state_dict['edge_attr'].numpy()
+            }
+            example = {
+                'board_state': board_state,
+                'policy': policies[i],
+                'value': 1.0 if board.game_state == 1 else -1.0 if board.game_state == 2 else 0.0
+            }
+            game_examples.append(example)
+        
+        filename = f"{data_dir}/game_{timestamp}_cpu{cpu}_game{game_idx}_iter{iteration}.pkl"
+        save_as_pickle(filename, game_examples)
+        
+        print(f"\nCPU {cpu}: Game {game_idx+1} completed. Result: {board.game_state}")
+        print(f"Game examples saved to: {filename}")
 
 if __name__ == "__main__":
     # Parse command line arguments
@@ -390,6 +397,7 @@ if __name__ == "__main__":
     parser.add_argument("--clique-size", type=int, default=3, help="Size of clique needed to win")
     parser.add_argument("--mcts-sims", type=int, default=500, help="Number of MCTS simulations per move")
     parser.add_argument("--cpu", type=int, default=0, help="CPU index for multiprocessing")
+    parser.add_argument("--game-mode", type=str, default="symmetric", help="Game mode: symmetric or asymmetric")
     
     args = parser.parse_args()
     
@@ -412,4 +420,4 @@ if __name__ == "__main__":
     net.share_memory()
     
     # Start self-play process
-    MCTS_self_play(net, args.num_games, args.vertices, args.clique_size, args.cpu, args.mcts_sims) 
+    MCTS_self_play(net, args.num_games, args.vertices, args.clique_size, args.cpu, args.mcts_sims, args.game_mode) 
