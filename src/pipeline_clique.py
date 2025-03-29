@@ -18,7 +18,7 @@ import encoder_decoder_clique as ed
 
 def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN, 
                    num_games: int = 40, num_vertices: int = 6, clique_size: int = 3,
-                   num_mcts_sims: int = 100) -> float:
+                   num_mcts_sims: int = 100, game_mode: str = "symmetric") -> float:
     """
     Evaluate the current model against the best model by playing games.
     
@@ -29,6 +29,7 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
         num_vertices: Number of vertices in the graph
         clique_size: Size of clique needed for Player 1 to win
         num_mcts_sims: Number of MCTS simulations per move
+        game_mode: "symmetric" or "asymmetric" game mode
         
     Returns:
         win_rate: Win rate of current model against best model
@@ -51,7 +52,7 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
         print(f"Evaluation Game {game_idx+1}/{num_games}")
         
         # Initialize a new game
-        board = CliqueBoard(num_vertices, clique_size)
+        board = CliqueBoard(num_vertices, clique_size, game_mode)
         game_over = False
         
         # Track game states for visualization
@@ -86,14 +87,16 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
                         current_model_wins += 1
                     else:  # Best model is Player 1
                         best_model_wins += 1
-                else:  # Player 2 wins
+                elif board.game_state == 2:  # Player 2 wins
                     if game_idx % 2 == 1:  # Current model is Player 2
                         current_model_wins += 1
                     else:  # Best model is Player 2
                         best_model_wins += 1
+                elif board.game_state == 3:  # Draw
+                    draws += 1
             
             # Check for draw - board filled
-            if not board.get_valid_moves():
+            if not board.get_valid_moves() and game_mode == "symmetric":
                 game_over = True
                 draws += 1
         
@@ -118,7 +121,8 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
     return win_rate
 
 def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int, 
-                 clique_size: int, mcts_sims: int, eval_threshold: float) -> None:
+                 clique_size: int, mcts_sims: int, eval_threshold: float,
+                 num_cpus: int = 4, game_mode: str = "symmetric") -> None:
     """Run one iteration of the AlphaZero pipeline"""
     print(f"=== Starting iteration {iteration} ===")
     
@@ -150,9 +154,8 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     torch.save({'state_dict': current_model.state_dict()}, current_model_path)
     
     # Run self-play games in parallel
-    print(f"Starting self-play with {num_self_play_games} games")
+    print(f"Starting self-play with {num_self_play_games} games using {num_cpus} CPU cores")
     processes = []
-    num_cpus = 3  # Use 4 cores
     games_per_cpu = num_self_play_games // num_cpus
     
     # Run at least 1 game per process
@@ -167,7 +170,7 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
         # Add remainder games to first process
         games = games_per_cpu + (remainder if i == 0 else 0)
         p = mp.Process(target=MCTS_self_play, 
-                      args=(current_model, games, num_vertices, clique_size, i, mcts_sims))
+                      args=(current_model, games, num_vertices, clique_size, i, mcts_sims, game_mode))
         p.start()
         processes.append(p)
     
@@ -206,7 +209,7 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
         # Run evaluation using evaluate_models function
         win_rate = evaluate_models(current_model, best_model, num_games=10, 
                                  num_vertices=num_vertices, clique_size=clique_size,
-                                 num_mcts_sims=mcts_sims)
+                                 num_mcts_sims=mcts_sims, game_mode=game_mode)
         
         print(f"Evaluation win rate: {win_rate:.2f}")
         
@@ -220,7 +223,8 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
 
 def run_pipeline(num_iterations: int = 5, num_self_play_games: int = 100,
                 num_vertices: int = 6, clique_size: int = 3,
-                num_mcts_sims: int = 500, evaluation_threshold: float = 0.55):
+                num_mcts_sims: int = 500, evaluation_threshold: float = 0.55,
+                num_cpus: int = 4, game_mode: str = "symmetric"):
     """
     Run the complete AlphaZero pipeline for Clique Game.
     
@@ -231,6 +235,8 @@ def run_pipeline(num_iterations: int = 5, num_self_play_games: int = 100,
         clique_size: Size of clique needed for Player 1 to win
         num_mcts_sims: Number of MCTS simulations per move
         evaluation_threshold: Win rate threshold to update best model
+        num_cpus: Number of CPU cores to use for parallel processing
+        game_mode: "symmetric" or "asymmetric" game mode
     """
     # Create directories
     os.makedirs("./model_data", exist_ok=True)
@@ -243,7 +249,8 @@ def run_pipeline(num_iterations: int = 5, num_self_play_games: int = 100,
         
         # Run iteration
         run_iteration(iteration, num_self_play_games, num_vertices, 
-                    clique_size, num_mcts_sims, evaluation_threshold)
+                    clique_size, num_mcts_sims, evaluation_threshold,
+                    num_cpus, game_mode)
         
         # Print iteration stats
         end_time = time.time()
@@ -417,6 +424,11 @@ if __name__ == "__main__":
                       help="Size of clique needed for Player 1 to win")
     parser.add_argument("--mcts-sims", type=int, default=500,
                       help="Number of MCTS simulations per move")
+    parser.add_argument("--num-cpus", type=int, default=4,
+                      help="Number of CPU cores to use for parallel processing (default: 4)")
+    parser.add_argument("--game-mode", type=str, default="symmetric",
+                      choices=["symmetric", "asymmetric"],
+                      help="Game mode: symmetric (both players try to form k-clique) or asymmetric (Player 1 tries to form k-clique, Player 2 tries to prevent it)")
     
     # Pipeline parameters
     parser.add_argument("--iterations", type=int, default=5,
@@ -447,7 +459,8 @@ if __name__ == "__main__":
     # Run selected mode
     if args.mode == "pipeline":
         run_pipeline(args.iterations, args.self_play_games, args.vertices,
-                   args.clique_size, args.mcts_sims, args.eval_threshold)
+                   args.clique_size, args.mcts_sims, args.eval_threshold,
+                   args.num_cpus, args.game_mode)
     
     elif args.mode == "selfplay":
         # Create model
@@ -505,7 +518,7 @@ if __name__ == "__main__":
         
         # Evaluate
         win_rate = evaluate_models(current_model, best_model, args.num_games, 
-                                 args.vertices, args.clique_size, args.mcts_sims)
+                                 args.vertices, args.clique_size, args.mcts_sims, args.game_mode)
         
         print(f"Win rate: {win_rate:.4f}")
     
