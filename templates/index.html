@@ -329,8 +329,8 @@
                 const response = await fetch('/api/click_edge', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        game_id: gameId, 
+                    body: JSON.stringify({
+                        game_id: gameId,
                         x: clickX, 
                         y: clickY,
                         edge_positions: edgePositions // Send edge positions
@@ -361,28 +361,28 @@
             const numVertices = parseInt(numVerticesInput.value);
             const k = parseInt(kValueInput.value);
             gameMode = gameModeSelect.value; // Update gameMode from selection
-
+            
             try {
                 const response = await fetch('/api/new_game', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ num_vertices: numVertices, k: k, game_mode: gameMode })
                 });
-
+                
                 const data = await response.json();
                 if (!response.ok) {
                    throw new Error(data.error || `HTTP error! status: ${response.status}`);
                 }
-
-                gameId = data.game_id;
+                
+                    gameId = data.game_id;
                 moveHistory = [];
-                gameActive = true;
-                resetGameBtn.disabled = false;
-
+                    gameActive = true;
+                    resetGameBtn.disabled = false;
+                    
                 updateGameBoard(data.board_image);
-                updateGameInfo(data);
+                    updateGameInfo(data);
                 updateValidMoves(data.valid_moves);
-                updateMoveHistory();
+                    updateMoveHistory();
                 edgePositions = data.edge_positions || []; // Store edge positions
 
                 // --> NEW: Reset AI state for new game
@@ -398,7 +398,7 @@
             } catch (error) {
                 console.error('Error starting new game:', error);
                 showError(`Failed to start new game: ${error.message}`);
-                gameActive = false;
+                        gameActive = false;
                 resetGameBtn.disabled = true;
             } finally {
                 setLoading(false);
@@ -411,18 +411,18 @@
 
             try {
                 const response = await fetch(`/api/reset_game/${gameId}`, { method: 'POST' });
-                 const data = await response.json();
+                const data = await response.json();
                  if (!response.ok) {
                     throw new Error(data.error || `HTTP error! status: ${response.status}`);
                  }
-
+                
                 moveHistory = [];
-                gameActive = true;
-
+                    gameActive = true;
+                    
                 updateGameBoard(data.board_image);
-                updateGameInfo(data);
+                    updateGameInfo(data);
                 updateValidMoves(data.valid_moves);
-                updateMoveHistory();
+                    updateMoveHistory();
                 edgePositions = data.edge_positions || [];
 
                  // --> NEW: Reset AI state on game reset
@@ -541,7 +541,7 @@
                 validMovesContainer.innerHTML = '<p>No valid moves available.</p>';
                 return;
             }
-
+            
             const ul = document.createElement('ul');
             ul.className = 'list-unstyled';
             moves.forEach(move => {
@@ -593,7 +593,7 @@
                 moveHistoryContainer.innerHTML = '<p>No moves made yet.</p>';
                 return;
             }
-
+            
             const ol = document.createElement('ol');
             moveHistory.forEach((item, index) => {
                 const li = document.createElement('li');
@@ -603,9 +603,9 @@
             });
              moveHistoryContainer.appendChild(ol);
              // Scroll to bottom
-             moveHistoryContainer.scrollTop = moveHistoryContainer.scrollHeight;
+            moveHistoryContainer.scrollTop = moveHistoryContainer.scrollHeight;
         }
-
+        
         function checkGameState(state) {
              if (state !== 0) {
                 // Game state update logic is now primarily in updateGameInfo

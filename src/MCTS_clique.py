@@ -334,8 +334,19 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
             # Get best move using MCTS
             best_move, root = UCT_search(board, mcts_sims, clique_net)
             
-            # Get policy from root node
-            policy = get_policy(root)
+            # Get policy from root node (MCTS)
+            mcts_policy = get_policy(root)
+            print(f"MCTS Policy: {mcts_policy}")
+            
+            # Get model's direct policy prediction
+            state_dict = ed.prepare_state_for_network(board)
+            with torch.no_grad():
+                model_policy, _ = clique_net(state_dict['edge_index'], state_dict['edge_attr'])
+                model_policy = model_policy.squeeze().cpu().numpy()
+            print(f"Model Policy: {model_policy}")
+            
+            # Use MCTS policy for actual moves
+            policy = mcts_policy
             
             # Store current state and policy
             game_states.append(board.copy())

@@ -292,8 +292,24 @@ class CliqueGNN(nn.Module):
             edge_features = edge_layer(x, edge_index, edge_features)
             x = x_new
         
+        # --- Debug Start --- 
+        # Print sample edge features before policy head
+        # if edge_features.numel() > 0:
+        #      print(f"DEBUG: Edge features into policy_head (sample): {edge_features[0]}")
+        # else:
+        #      print("DEBUG: Edge features tensor is empty!")
+        # --- Debug End --- 
+        
         # Generate edge scores
         edge_scores = self.policy_head(edge_features)
+        
+        # --- Debug Start --- 
+        # Print sample edge scores after policy head
+        # if edge_scores.numel() > 0:
+        #      print(f"DEBUG: Edge scores from policy_head (sample): {edge_scores[0]}")
+        # else:
+        #      print("DEBUG: Edge scores tensor is empty!")
+        # --- Debug End ---
         
         # Process each graph in the batch separately
         policies = []
@@ -316,9 +332,6 @@ class CliqueGNN(nn.Module):
             # Calculate number of edges in complete graph for this size
             num_edges = num_nodes * (num_nodes - 1) // 2
             
-            # Create policy for this graph
-            policy = torch.zeros(num_edges, device=edge_index.device)
-            
             # Create edge mapping for this graph
             edge_map = {}
             idx = 0
@@ -328,13 +341,52 @@ class CliqueGNN(nn.Module):
                     edge_map[(k, j)] = idx
                     idx += 1
             
-            # Map edge scores to policy indices
-            for j in range(graph_edge_index.shape[1]):
-                src, dst = graph_edge_index[0, j].item() - start_idx, graph_edge_index[1, j].item() - start_idx
-                if src < dst:  # Only consider upper triangular
-                    edge_idx = edge_map.get((src, dst), -1)
-                    if edge_idx >= 0 and edge_idx < num_edges:
-                        policy[edge_idx] = graph_edge_scores[j]
+            # --- Reworked Mapping Logic ---
+            # Create a temporary dict to hold scores for canonical edges
+            canonical_scores = {}
+            # population_count = 0 # Debug Counter
+            for j in range(graph_edge_index.shape[1]): # Loop through edges found for this graph
+                # Explicitly cast to int after .item()
+                src_item = graph_edge_index[0, j].item() - start_idx
+                dst_item = graph_edge_index[1, j].item() - start_idx
+                src = int(src_item)
+                dst = int(dst_item)
+                
+                if src != dst: # Ignore self-loops for policy assignment
+                     canonical_edge = tuple(sorted((src, dst))) # Key is now definitely (int, int)
+                     # Store the score associated with this edge (take first occurrence if duplicated)
+                     if canonical_edge not in canonical_scores:
+                          score_value = graph_edge_scores[j].item() # Get the score as a float
+                          canonical_scores[canonical_edge] = score_value # Use .item()
+                          # if score_value != 0.0: # Debug Print
+                          #      population_count += 1
+                          #      print(f"DEBUG: Populating canonical_scores[{canonical_edge}] = {score_value}") # ADDED
+
+            # ADDED Debug Print: Show the dictionary contents
+            # print(f"DEBUG: Populated canonical_scores dict ({population_count} non-zero entries): {canonical_scores}")
+    
+            # Now, fill the policy vector using the canonical scores
+            policy = torch.zeros(num_edges, device=edge_index.device)
+            edge_map_items = edge_map.items()
+    
+            # assigned_count = 0 # Debug counter
+            for edge_tuple, edge_idx in edge_map_items:
+                 # edge_map contains both (j,k) and (k,j) mapping to same index
+                 # We only need to assign once per index, using the canonical tuple
+                 canonical_edge = tuple(sorted(edge_tuple))
+                 if edge_tuple == canonical_edge: # Process only for the canonical key e.g. (0, 1) not (1, 0)
+                     score = canonical_scores.get(canonical_edge, 0.0) # Get score, default to 0.0 if missing
+                     policy[edge_idx] = score
+                     # if score != 0.0: # Debug print
+                     #      assigned_count += 1
+                     #      # print(f"DEBUG: Assigning score {score} to index {edge_idx} for edge {canonical_edge}")
+
+            # print(f"DEBUG: Assigned {assigned_count} non-zero scores to policy vector") # Debug print
+            # --- End Reworked Mapping Logic ---
+            
+            # Print policy vector before softmax
+            # print(f"DEBUG: Graph {i} Policy before softmax: {policy}")
+            # --- Debug End --- 
             
             # Normalize policy
             policy = F.softmax(policy, dim=0)
@@ -366,6 +418,7 @@ class CliqueGNN(nn.Module):
         
         # Initialize optimizer with learning rate scheduler
         initial_lr = 0.001
+        # initial_lr = 10
         min_lr = 1e-7  # Minimum learning rate
         optimizer = optim.Adam(self.parameters(), lr=initial_lr)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(

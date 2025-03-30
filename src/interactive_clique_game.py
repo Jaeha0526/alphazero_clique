@@ -376,12 +376,12 @@ def get_prediction(game_id):
 
     try:
         # Prepare the current board state for the network
-        edge_index, edge_attr = prepare_state_for_network(board)
+        state_data = prepare_state_for_network(board) # Get the dictionary
+        edge_index = state_data['edge_index']         # Extract tensor from dict
+        edge_attr = state_data['edge_attr']          # Extract tensor from dict
         
         # Ensure tensors are on the same device as the model
         device = next(model.parameters()).device
-        edge_index = edge_index.to(device)
-        edge_attr = edge_attr.to(device)
 
         # Run inference
         with torch.no_grad():

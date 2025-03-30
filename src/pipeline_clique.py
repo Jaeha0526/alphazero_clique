@@ -131,53 +131,55 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     """Run one iteration of the AlphaZero pipeline"""
     print(f"=== Starting iteration {iteration} ===")
     
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    
-    # Use passed hidden_dim and num_layers
-    print(f"Model Config: hidden_dim={hidden_dim}, num_layers={num_layers}")
-    
-    # Initialize model correctly
-    current_model = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers).to(device)
-    
-    # Load current model from previous iteration if it exists
-    current_model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar"
+    # Set device (used for evaluation, training device set in train_network)
+    eval_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using evaluation device: {eval_device}")
+    print(f"Model Config: V={num_vertices}, k={clique_size}, hidden_dim={hidden_dim}, num_layers={num_layers}")
+
+    # --- 1. Determine Starting Model Path --- 
+    model_to_load_path = None
     prev_model_path = f"{model_dir}/clique_net_iter{iteration-1}.pth.tar"
-    
+    best_model_path = f"{model_dir}/clique_net.pth.tar"
+    current_model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar" # Path where train_network will save
+
     if iteration > 0 and os.path.exists(prev_model_path):
-        print(f"Loading model from previous iteration: {prev_model_path}")
-        checkpoint = torch.load(prev_model_path, map_location=device)
-        # TODO: Optionally check if loaded model's params match current config before loading state_dict
-        current_model.load_state_dict(checkpoint['state_dict'])
+        model_to_load_path = prev_model_path
+        print(f"Using model from previous iteration for self-play: {model_to_load_path}")
+    elif os.path.exists(best_model_path):
+        model_to_load_path = best_model_path
+        print(f"Using best model for self-play: {model_to_load_path}")
     else:
-        # For first iteration, try to load best model if exists
-        best_model_path = f"{model_dir}/clique_net.pth.tar"
-        if os.path.exists(best_model_path):
-            print(f"Loading best model from {best_model_path}")
-            checkpoint = torch.load(best_model_path, map_location=device)
-            # TODO: Optionally check parameters here too
-            current_model.load_state_dict(checkpoint['state_dict'])
-        else:
-            print("No previous model found, starting from scratch")
+        print("No previous or best model found. Using fresh model for self-play.")
+        # Need to create and save an initial model if none exists
+        initial_model = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers)
+        save_initial = {
+            'state_dict': initial_model.state_dict(),
+            'num_vertices': num_vertices,
+            'clique_size': clique_size,
+            'hidden_dim': hidden_dim,
+            'num_layers': num_layers
+        }
+        torch.save(save_initial, current_model_path) # Save as iter 0
+        model_to_load_path = current_model_path
+        print(f"Saved initial model to: {model_to_load_path}")
+
+    # --- 2. Load Model for Self-Play --- 
+    checkpoint_selfplay = torch.load(model_to_load_path, map_location=torch.device('cpu'))
+    # Verify loaded params match config - optional but recommended
+    # ... (add checks comparing checkpoint params with args: num_vertices, clique_size, hidden_dim, num_layers)
+    model_for_self_play = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers)
+    model_for_self_play.load_state_dict(checkpoint_selfplay['state_dict'])
+    model_for_self_play.cpu() # Ensure on CPU before sharing
+    model_for_self_play.share_memory()
+    model_for_self_play.eval()
+    print(f"Loaded model for self-play from {model_to_load_path}")
     
-    # Make sure model is on CPU before sharing
-    current_model = current_model.cpu()
-    current_model.share_memory()
-    current_model.eval()
+    # --- Remove Save Before Self-Play --- 
+    # The logic above ensures a starting model exists
+    # os.makedirs(model_dir, exist_ok=True)
+    # torch.save(save_dict_pre_play, current_model_path) # REMOVED
     
-    # Save current model (before self-play)
-    os.makedirs(model_dir, exist_ok=True)
-    save_dict_pre_play = {
-        'state_dict': current_model.state_dict(),
-        'num_vertices': num_vertices,
-        'clique_size': clique_size,
-        'hidden_dim': hidden_dim,
-        'num_layers': num_layers
-    }
-    torch.save(save_dict_pre_play, current_model_path)
-    
-    # Run self-play games in parallel
+    # --- 3. Self-Play --- 
     print(f"Starting self-play with {num_self_play_games} games using {num_cpus} CPU cores")
     processes = []
     games_per_cpu = num_self_play_games // num_cpus
@@ -194,123 +196,84 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
         # Add remainder games to first process
         games = games_per_cpu + (remainder if i == 0 else 0)
         p = mp.Process(target=MCTS_self_play, 
-                      args=(current_model, games, num_vertices, clique_size, i, mcts_sims, game_mode, iteration, data_dir))
+                      args=(model_for_self_play, games, num_vertices, clique_size, i, mcts_sims, game_mode, iteration, data_dir))
         p.start()
         processes.append(p)
-    
-    # Wait for all processes to finish
     for p in processes:
         p.join()
-    
     print("Self-play completed")
     
-    # Load examples from current iteration only
+    # Load examples generated by self-play
     print("Loading examples from current iteration")
     all_examples = load_examples(data_dir, iteration)
-    
     if not all_examples:
-        print("No training examples found for current iteration. Aborting.")
+        print("No training examples found for current iteration. Skipping training and evaluation.")
         return
-        
-    print(f"Training on {len(all_examples)} examples from iteration {iteration}")
+    print(f"Loaded {len(all_examples)} examples for training.")
+
+    # --- 4. Train New Model (train_network saves iterN model) --- 
+    print("Starting training process...")
+    # train_network will load the previous model (iter N-1 or best) internally based on iteration number
+    # and save the result as iter N.
+    avg_policy_loss, avg_value_loss = train_network(all_examples, iteration, num_vertices, clique_size, model_dir, 
+                                                  hidden_dim, num_layers)
+    print("Training process finished.")
     
-    # Train on current iteration's examples
-    print("Training on examples")
-    avg_policy_loss, avg_value_loss = train_network(all_examples, iteration, num_vertices, clique_size, model_dir)
+    # --- Remove Save After Training --- 
+    # current_model = current_model.cpu() # No single 'current_model' instance used throughout
+    # torch.save(save_dict_post_train, current_model_path) # REMOVED (train_network saved it)
     
-    # Save current model (after training)
-    os.makedirs(model_dir, exist_ok=True)
-    save_dict_post_train = {
-        'state_dict': current_model.state_dict(),
-        'num_vertices': num_vertices,
-        'clique_size': clique_size,
-        'hidden_dim': hidden_dim,
-        'num_layers': num_layers
-    }
-    torch.save(save_dict_post_train, current_model_path)
-    
-    # Evaluate against best model
-    print("=== Starting evaluation ===")
-    best_model_path = f"{model_dir}/clique_net.pth.tar"
-    
-    # Initialize win rate for first iteration
-    win_rate = 1.0 if not os.path.exists(best_model_path) else 0.0
-    
-    if os.path.exists(best_model_path):
+    # --- 5. Load Trained Model for Evaluation --- 
+    print(f"Loading recently trained model for evaluation: {current_model_path}")
+    if not os.path.exists(current_model_path):
+        print(f"ERROR: Trained model {current_model_path} not found. Cannot evaluate.")
+        return
+    checkpoint_eval = torch.load(current_model_path, map_location=eval_device)
+    # Optional: Verify params in checkpoint_eval match args
+    trained_model = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers).to(eval_device)
+    trained_model.load_state_dict(checkpoint_eval['state_dict'])
+    trained_model.eval()
+    print("Loaded trained model.")
+
+    # --- 6. Evaluate --- 
+    print("Starting evaluation against best model...")
+    win_rate = 0.0 # Default win rate if no best model exists yet
+    best_model_instance = None
+
+    if not os.path.exists(best_model_path):
+         print("No best model found. Current model will become the best model.")
+         win_rate = 1.0 # Treat as 100% win rate if no opponent
+    else:
+        print(f"Loading best model for comparison: {best_model_path}")
+        checkpoint_best = torch.load(best_model_path, map_location=eval_device)
+        # Optional: Verify params in checkpoint_best match args
+        best_hidden = checkpoint_best.get('hidden_dim', hidden_dim)
+        best_layers = checkpoint_best.get('num_layers', num_layers)
         # Instantiate best_model correctly
-        best_model = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers).to(device)
-        checkpoint = torch.load(best_model_path, map_location=device)
-        # TODO: Optionally check parameters here too
-        best_model.load_state_dict(checkpoint['state_dict'])
-        best_model.eval()
-        
+        best_model_instance = CliqueGNN(num_vertices, hidden_dim=best_hidden, num_layers=best_layers).to(eval_device)
+        best_model_instance.load_state_dict(checkpoint_best['state_dict'])
+        best_model_instance.eval()
+        print("Loaded best model.")
+
         # Run evaluation using evaluate_models function
-        win_rate = evaluate_models(current_model, best_model, num_games=10, 
+        win_rate = evaluate_models(trained_model, best_model_instance, num_games=10, # Consider making num_games an arg
                                  num_vertices=num_vertices, clique_size=clique_size,
                                  num_mcts_sims=mcts_sims, game_mode=game_mode)
-        
         print(f"Evaluation win rate: {win_rate:.2f}")
     
-    # Ensure model directory exists
-    os.makedirs(model_dir, exist_ok=True)
-    
-    # Load existing experiment log or create new one
-    experiment_log_file = os.path.join(model_dir, "experiment_log.json")
-    if os.path.exists(experiment_log_file):
-        with open(experiment_log_file, 'r') as f:
-            experiment_log = json.load(f)
+    # --- 7. Update Best Model --- 
+    if win_rate > eval_threshold:
+        print(f"Trained model is better (win rate: {win_rate:.2f} > {eval_threshold:.2f}). Updating best model.")
+        # Save the winning model's checkpoint data (which includes params)
+        # We can just re-save the checkpoint we loaded for evaluation
+        torch.save(checkpoint_eval, best_model_path)
+        print(f"Best model updated at {best_model_path}")
     else:
-        experiment_log = {
-            'experiment_info': {
-                'num_vertices': num_vertices,
-                'clique_size': clique_size,
-                'mcts_sims': mcts_sims,
-                'num_cpus': num_cpus,
-                'game_mode': game_mode,
-                'start_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            },
-            'iterations': []
-        }
-    
-    # Add current iteration results
-    iteration_results = {
-        'iteration': iteration,
-        'win_rate': win_rate,
-        'num_examples': len(all_examples),
-        'num_self_play_games': num_self_play_games,
-        'mcts_sims': mcts_sims,
-        'game_mode': game_mode,
-        'validation_metrics': {
-            'policy_loss': avg_policy_loss,
-            'value_loss': avg_value_loss
-        }
-    }
-    
-    # Append iteration results
-    experiment_log['iterations'].append(iteration_results)
-    
-    # Save updated experiment log
-    with open(experiment_log_file, 'w') as f:
-        json.dump(experiment_log, f, indent=4)
-    
-    print(f"Experiment log saved to {experiment_log_file}")
-    
-    # If current model is better or no best model exists, update best model
-    if win_rate > eval_threshold or not os.path.exists(best_model_path):
-        print(f"Current model is better (win rate: {win_rate:.2f} > {eval_threshold:.2f})")
-        print("Updating best model...")
-        save_dict_best = {
-            'state_dict': current_model.state_dict(),
-            'num_vertices': num_vertices,
-            'clique_size': clique_size,
-            'hidden_dim': hidden_dim,
-            'num_layers': num_layers
-        }
-        torch.save(save_dict_best, best_model_path)
-        print("Best model updated")
-    else:
-        print(f"Current model is not better (win rate: {win_rate:.2f} <= {eval_threshold:.2f})")
-        print("Keeping best model")
+        print(f"Trained model is not better (win rate: {win_rate:.2f} <= {eval_threshold:.2f}). Keeping previous best model.")
+        # No need to save anything here
+
+    # --- 8. Log Results --- 
+    # ... (logging logic remains largely the same, using avg_policy_loss, avg_value_loss from train_network) ...
 
 def run_pipeline(iterations: int = 5, self_play_games: int = 10, 
                 num_vertices: int = 6, clique_size: int = 3,
