@@ -1,0 +1,48 @@
+{
+    "experiment_info": {
+        "num_vertices": 6,
+        "clique_size": 3,
+        "mcts_sims": 777,
+        "num_cpus": 6,
+        "game_mode": "symmetric",
+        "start_time": "2025-03-29 20:49:46"
+    },
+    "iterations": [
+        {
+            "iteration": 0,
+            "win_rate": 1.0,
+            "num_examples": 281,
+            "num_self_play_games": 10,
+            "mcts_sims": 777,
+            "game_mode": "symmetric",
+            "validation_metrics": {
+                "policy_loss": 2.7080502674497406,
+                "value_loss": 1.0261517228751347
+            }
+        },
+        {
+            "iteration": 1,
+            "win_rate": 0.4,
+            "num_examples": 280,
+            "num_self_play_games": 10,
+            "mcts_sims": 777,
+            "game_mode": "symmetric",
+            "validation_metrics": {
+                "policy_loss": 2.708050242492131,
+                "value_loss": 0.15548032522201538
+            }
+        },
+        {
+            "iteration": 2,
+            "win_rate": 0.6,
+            "num_examples": 279,
+            "num_self_play_games": 10,
+            "mcts_sims": 777,
+            "game_mode": "symmetric",
+            "validation_metrics": {
+                "policy_loss": 2.708050310611725,
+                "value_loss": 0.5415664315223694
+            }
+        }
+    ]
+}

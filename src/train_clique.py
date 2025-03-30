@@ -56,7 +56,8 @@ def load_examples(folder_path: str, iteration: int = None) -> List:
     print(f"Loaded {len(all_examples)} examples")
     return all_examples
 
-def train_network(all_examples: List, iteration: int, num_vertices: int, clique_size: int, model_dir: str) -> Tuple[float, float]:
+def train_network(all_examples: List, iteration: int, num_vertices: int, clique_size: int, model_dir: str, 
+                   hidden_dim: int = 64, num_layers: int = 2) -> Tuple[float, float]:
     """
     Train the network on the given examples.
     
@@ -66,6 +67,8 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
         num_vertices: Number of vertices in the graph
         clique_size: Size of clique needed to win
         model_dir: Directory to save models
+        hidden_dim: Hidden dimension size for GNN layers
+        num_layers: Number of GNN layers
         
     Returns:
         Tuple of (avg_policy_loss, avg_value_loss) from validation
@@ -76,9 +79,10 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     val_examples = all_examples[train_size:]
     
     print(f"Training on {len(train_examples)} examples, validating on {len(val_examples)} examples")
+    print(f"Model Config: hidden_dim={hidden_dim}, num_layers={num_layers}")
     
-    # Initialize network
-    net = CliqueGNN(num_vertices, clique_size)
+    # Initialize network correctly
+    net = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers)
     
     # Load model from previous iteration
     prev_model_path = f"{model_dir}/clique_net_iter{iteration-1}.pth.tar"
@@ -168,12 +172,21 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     
     # Save the trained model
     model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar"
-    torch.save({'state_dict': net.state_dict()}, model_path)
+    save_dict = {
+        'state_dict': net.state_dict(),
+        'num_vertices': num_vertices,
+        'clique_size': clique_size,
+        'hidden_dim': hidden_dim,
+        'num_layers': num_layers
+    }
+    torch.save(save_dict, model_path)
     print(f"Model saved to {model_path}")
     
     return avg_policy_loss, avg_value_loss
 
-def train_pipeline(iterations: int = 5, num_vertices: int = 6, data_dir: str = "./datasets/clique", model_dir: str = "./model_data", clique_size: int = 3) -> None:
+def train_pipeline(iterations: int = 5, num_vertices: int = 6, data_dir: str = "./datasets/clique", 
+                   model_dir: str = "./model_data", clique_size: int = 3, 
+                   hidden_dim: int = 64, num_layers: int = 2) -> None:
     """
     Run the full training pipeline for the given number of iterations.
     
@@ -183,6 +196,8 @@ def train_pipeline(iterations: int = 5, num_vertices: int = 6, data_dir: str = "
         data_dir: Directory containing training data
         model_dir: Directory to save models
         clique_size: Size of clique needed to win
+        hidden_dim: Hidden dimension size for GNN layers
+        num_layers: Number of GNN layers
     """
     for iteration in range(iterations):
         print(f"Starting iteration {iteration+1}/{iterations}")
@@ -211,7 +226,8 @@ def train_pipeline(iterations: int = 5, num_vertices: int = 6, data_dir: str = "
         print(f"Loaded {len(all_examples)} examples for iteration {iteration}")
         
         # 2. Train network on current iteration's examples
-        train_network(all_examples, iteration, num_vertices, clique_size, model_dir)
+        train_network(all_examples, iteration, num_vertices, clique_size, model_dir, 
+                      hidden_dim, num_layers)
         
         # 3. Wait before next iteration to allow for self-play
         if iteration < iterations - 1:
@@ -224,18 +240,21 @@ def train_pipeline(iterations: int = 5, num_vertices: int = 6, data_dir: str = "
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Train AlphaZero for Clique Game")
-    parser.add_argument("--iterations", type=int, default=5, 
-                       help="Number of iterations to run")
-    parser.add_argument("--vertices", type=int, default=6, 
-                       help="Number of vertices in the graph")
-    
+    parser = argparse.ArgumentParser(description="Train AlphaZero for Clique Game (Standalone)")
+    parser.add_argument("--iterations", type=int, default=5, help="Number of iterations to run")
+    parser.add_argument("--vertices", type=int, default=6, help="Number of vertices in the graph")
+    parser.add_argument("--k", type=int, default=3, help="Clique size")
+    parser.add_argument("--hidden-dim", type=int, default=64, help="GNN hidden dimension")
+    parser.add_argument("--num-layers", type=int, default=2, help="Number of GNN layers")
+    parser.add_argument("--data-dir", type=str, default="./datasets/clique", help="Directory for datasets")
+    parser.add_argument("--model-dir", type=str, default="./model_data", help="Directory for models")
+
     args = parser.parse_args()
-    
+
     # Create output directories
-    os.makedirs("./model_data", exist_ok=True)
-    os.makedirs("./datasets/clique", exist_ok=True)
-    
-    # Start the training pipeline
-    train_pipeline(args.iterations, args.vertices) 
-    train_pipeline(args.iterations, args.vertices) 
+    os.makedirs(args.model_dir, exist_ok=True)
+    os.makedirs(args.data_dir, exist_ok=True)
+
+    # Start the training pipeline, passing new args
+    train_pipeline(args.iterations, args.vertices, args.data_dir, args.model_dir, args.k, 
+                   args.hidden_dim, args.num_layers) 

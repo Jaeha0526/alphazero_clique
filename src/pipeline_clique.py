@@ -125,6 +125,7 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
 
 def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int, 
                  clique_size: int, mcts_sims: int, eval_threshold: float,
+                 hidden_dim: int, num_layers: int,
                  num_cpus: int = 4, game_mode: str = "symmetric",
                  data_dir: str = "./datasets/clique", model_dir: str = "./model_data") -> None:
     """Run one iteration of the AlphaZero pipeline"""
@@ -134,8 +135,11 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Initialize model
-    current_model = CliqueGNN(num_vertices, clique_size).to(device)
+    # Use passed hidden_dim and num_layers
+    print(f"Model Config: hidden_dim={hidden_dim}, num_layers={num_layers}")
+    
+    # Initialize model correctly
+    current_model = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers).to(device)
     
     # Load current model from previous iteration if it exists
     current_model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar"
@@ -144,6 +148,7 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     if iteration > 0 and os.path.exists(prev_model_path):
         print(f"Loading model from previous iteration: {prev_model_path}")
         checkpoint = torch.load(prev_model_path, map_location=device)
+        # TODO: Optionally check if loaded model's params match current config before loading state_dict
         current_model.load_state_dict(checkpoint['state_dict'])
     else:
         # For first iteration, try to load best model if exists
@@ -151,6 +156,7 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
         if os.path.exists(best_model_path):
             print(f"Loading best model from {best_model_path}")
             checkpoint = torch.load(best_model_path, map_location=device)
+            # TODO: Optionally check parameters here too
             current_model.load_state_dict(checkpoint['state_dict'])
         else:
             print("No previous model found, starting from scratch")
@@ -160,9 +166,16 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     current_model.share_memory()
     current_model.eval()
     
-    # Save current model
+    # Save current model (before self-play)
     os.makedirs(model_dir, exist_ok=True)
-    torch.save({'state_dict': current_model.state_dict()}, current_model_path)
+    save_dict_pre_play = {
+        'state_dict': current_model.state_dict(),
+        'num_vertices': num_vertices,
+        'clique_size': clique_size,
+        'hidden_dim': hidden_dim,
+        'num_layers': num_layers
+    }
+    torch.save(save_dict_pre_play, current_model_path)
     
     # Run self-play games in parallel
     print(f"Starting self-play with {num_self_play_games} games using {num_cpus} CPU cores")
@@ -205,9 +218,16 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     print("Training on examples")
     avg_policy_loss, avg_value_loss = train_network(all_examples, iteration, num_vertices, clique_size, model_dir)
     
-    # Save current model
+    # Save current model (after training)
     os.makedirs(model_dir, exist_ok=True)
-    torch.save({'state_dict': current_model.state_dict()}, current_model_path)
+    save_dict_post_train = {
+        'state_dict': current_model.state_dict(),
+        'num_vertices': num_vertices,
+        'clique_size': clique_size,
+        'hidden_dim': hidden_dim,
+        'num_layers': num_layers
+    }
+    torch.save(save_dict_post_train, current_model_path)
     
     # Evaluate against best model
     print("=== Starting evaluation ===")
@@ -217,8 +237,10 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     win_rate = 1.0 if not os.path.exists(best_model_path) else 0.0
     
     if os.path.exists(best_model_path):
-        best_model = CliqueGNN(num_vertices, clique_size).to(device)
+        # Instantiate best_model correctly
+        best_model = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers).to(device)
         checkpoint = torch.load(best_model_path, map_location=device)
+        # TODO: Optionally check parameters here too
         best_model.load_state_dict(checkpoint['state_dict'])
         best_model.eval()
         
@@ -277,7 +299,14 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     if win_rate > eval_threshold or not os.path.exists(best_model_path):
         print(f"Current model is better (win rate: {win_rate:.2f} > {eval_threshold:.2f})")
         print("Updating best model...")
-        torch.save({'state_dict': current_model.state_dict()}, best_model_path)
+        save_dict_best = {
+            'state_dict': current_model.state_dict(),
+            'num_vertices': num_vertices,
+            'clique_size': clique_size,
+            'hidden_dim': hidden_dim,
+            'num_layers': num_layers
+        }
+        torch.save(save_dict_best, best_model_path)
         print("Best model updated")
     else:
         print(f"Current model is not better (win rate: {win_rate:.2f} <= {eval_threshold:.2f})")
@@ -285,8 +314,10 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
 
 def run_pipeline(iterations: int = 5, self_play_games: int = 10, 
                 num_vertices: int = 6, clique_size: int = 3,
-                mcts_sims: int = 500, num_cpus: int = 1,
-                game_mode: str = "symmetric", experiment_name: str = "default") -> None:
+                mcts_sims: int = 500, hidden_dim: int = 64, num_layers: int = 2,
+                num_cpus: int = 1, game_mode: str = "symmetric", 
+                eval_threshold: float = 0.55,
+                experiment_name: str = "default") -> None:
     """
     Run the full AlphaZero pipeline for the Clique Game.
     
@@ -315,9 +346,10 @@ def run_pipeline(iterations: int = 5, self_play_games: int = 10,
     for iteration in range(iterations):
         print(f"\nStarting iteration {iteration+1}/{iterations}")
         
-        # Run iteration with experiment-specific directories
+        # Run iteration with experiment-specific directories, passing new params
         run_iteration(iteration, self_play_games, num_vertices, 
-                     clique_size, mcts_sims, 0.55,  # Using default eval threshold
+                     clique_size, mcts_sims, eval_threshold,
+                     hidden_dim, num_layers,
                      num_cpus, game_mode, data_dir, model_dir)
         
         # Move files to experiment-specific directories
@@ -487,121 +519,146 @@ if __name__ == "__main__":
     except RuntimeError:
         print("Multiprocessing start method already set or not needed")
     
-    parser = argparse.ArgumentParser(description="AlphaZero Pipeline for Clique Game")
+    parser = argparse.ArgumentParser(description="AlphaZero Clique Game Pipeline")
     
     # Mode selection
     parser.add_argument("--mode", type=str, default="pipeline", 
-                      choices=["pipeline", "selfplay", "train", "evaluate", "play"],
-                      help="Mode to run")
+                        choices=["pipeline", "selfplay", "train", "evaluate", "play"],
+                        help="Execution mode")
     
-    # General parameters
-    parser.add_argument("--vertices", type=int, default=6,
-                      help="Number of vertices in the graph")
-    parser.add_argument("--clique-size", type=int, default=3,
-                      help="Size of clique needed for Player 1 to win")
-    parser.add_argument("--mcts-sims", type=int, default=500,
-                      help="Number of MCTS simulations per move")
-    parser.add_argument("--num-cpus", type=int, default=4,
-                      help="Number of CPU cores to use for parallel processing (default: 4)")
-    parser.add_argument("--game-mode", type=str, default="symmetric",
-                      choices=["symmetric", "asymmetric"],
-                      help="Game mode: symmetric (both players try to form k-clique) or asymmetric (Player 1 tries to form k-clique, Player 2 tries to prevent it)")
+    # Game parameters
+    parser.add_argument("--vertices", type=int, default=6, help="Number of vertices")
+    parser.add_argument("--k", type=int, default=3, help="Clique size to find")
+    parser.add_argument("--game-mode", type=str, default="symmetric", 
+                        choices=["symmetric", "asymmetric"], help="Game rules")
     
     # Pipeline parameters
-    parser.add_argument("--iterations", type=int, default=5,
-                      help="Number of iterations to run")
-    parser.add_argument("--self-play-games", type=int, default=100,
-                      help="Number of self-play games per iteration")
-    parser.add_argument("--eval-threshold", type=float, default=0.55,
-                      help="Win rate threshold to update best model")
-    parser.add_argument("--experiment-name", type=str, default="default",
-                      help="Name of the experiment for organizing data and models")
+    parser.add_argument("--iterations", type=int, default=5, help="Number of pipeline iterations")
+    parser.add_argument("--self-play-games", type=int, default=100, help="Number of self-play games per iteration")
+    parser.add_argument("--mcts-sims", type=int, default=200, help="Number of MCTS simulations per move")
+    parser.add_argument("--eval-threshold", type=float, default=0.55, help="Win rate threshold to update best model")
+    parser.add_argument("--num-cpus", type=int, default=4, help="Number of CPUs for parallel self-play")
+    parser.add_argument("--experiment-name", type=str, default="default", help="Name for organizing data/models")
     
-    # Self-play parameters
-    parser.add_argument("--num-games", type=int, default=100,
-                      help="Number of games to play")
-    parser.add_argument("--cpu", type=int, default=0,
-                      help="CPU index for multiprocessing")
+    # Model parameters (New)
+    parser.add_argument("--hidden-dim", type=int, default=64, help="Hidden dimension size in GNN layers")
+    parser.add_argument("--num-layers", type=int, default=2, help="Number of GNN layers in the model")
     
-    # Training parameters
-    parser.add_argument("--iteration", type=int, default=0,
-                      help="Training iteration number")
-    
-    # Play parameters
-    parser.add_argument("--model-path", type=str, default=None,
-                      help="Path to model to load")
-    parser.add_argument("--human-player", type=int, default=0,
-                      help="Human player (0 for Player 1, 1 for Player 2)")
-    
+    # Specific mode parameters (can add more if needed, e.g., model paths for evaluate/play)
+    parser.add_argument("--iteration", type=int, default=0, help="Iteration number (for train mode)")
+    parser.add_argument("--num-games", type=int, default=10, help="Number of games (for evaluate/play modes)")
+
     args = parser.parse_args()
-    
-    # Run selected mode
+
+    # Create base directories
+    data_base_dir = f"./datasets/clique/{args.experiment_name}"
+    model_dir = f"./model_data/{args.experiment_name}"
+    os.makedirs(data_base_dir, exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
+
+    # Execute selected mode
     if args.mode == "pipeline":
-        run_pipeline(args.iterations, args.self_play_games, args.vertices,
-                   args.clique_size, args.mcts_sims, args.num_cpus, args.game_mode,
-                   args.experiment_name)
-    
+        run_pipeline(iterations=args.iterations, 
+                     self_play_games=args.self_play_games, 
+                     num_vertices=args.vertices, 
+                     clique_size=args.k,
+                     mcts_sims=args.mcts_sims, 
+                     hidden_dim=args.hidden_dim,
+                     num_layers=args.num_layers,
+                     num_cpus=args.num_cpus,
+                     game_mode=args.game_mode, 
+                     eval_threshold=args.eval_threshold,
+                     experiment_name=args.experiment_name)
+                     
     elif args.mode == "selfplay":
-        # Create model
-        model = CliqueGNN(num_vertices=args.vertices)
-        model_path = "./model_data/clique_net.pth.tar"
-        
-        # Load model if exists
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if os.path.exists(model_path):
-            model.load_state_dict(torch.load(model_path, map_location=device)['state_dict'])
-            print(f"Loaded model from {model_path}")
+        print("Running Self-Play Only Mode")
+        # Needs model loading and correct instantiation
+        model_path = os.path.join(model_dir, "clique_net.pth.tar") # Assume using best model
+        if not os.path.exists(model_path):
+            print(f"ERROR: Model not found at {model_path} for self-play.")
         else:
-            print("No model found, using random initialization")
+            checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+            # Infer params from checkpoint if possible, else use args/defaults
+            loaded_v = checkpoint.get('num_vertices', args.vertices)
+            loaded_k = checkpoint.get('clique_size', args.k)
+            loaded_hidden = checkpoint.get('hidden_dim', args.hidden_dim)
+            loaded_layers = checkpoint.get('num_layers', args.num_layers)
+            if loaded_v != args.vertices or loaded_k != args.k:
+                 print("Warning: Model parameters differ from command line args for self-play.")
+                 
+            model = CliqueGNN(num_vertices=loaded_v, hidden_dim=loaded_hidden, num_layers=loaded_layers)
+            model.load_state_dict(checkpoint['state_dict'])
+            model.share_memory() # Important for multiprocessing
+            model.eval()
             
-        # Make sure model is on CPU before sharing
-        model = model.cpu()
-        model.share_memory()
-        model.eval()
-        
-        # Run self-play
-        MCTS_self_play(model, args.num_games, args.vertices, args.clique_size, args.cpu, args.mcts_sims)
-    
+            MCTS_self_play(model=model, 
+                           num_games=args.self_play_games, 
+                           num_vertices=args.vertices, # Use game vertices
+                           k=args.k,                   # Use game k
+                           process_id=0, 
+                           mcts_sims=args.mcts_sims, 
+                           game_mode=args.game_mode, 
+                           iteration=args.iteration, # Pass iteration if needed for saving
+                           data_dir=data_base_dir) 
+                           
     elif args.mode == "train":
-        # Load examples
-        all_examples = load_examples("./datasets/clique")
-        
+        print("Running Training Only Mode")
+        # This mode relies on train_clique.py which also needs updating
+        print("WARNING: train_clique.py may need updates for hidden_dim/num_layers.")
+        all_examples = load_examples(data_base_dir, args.iteration) # Load specific iteration
         if not all_examples:
-            print("No training examples found. Aborting.")
+             print(f"No examples found for iteration {args.iteration} in {data_base_dir}")
         else:
-            # Train network
-            train_network(all_examples, args.iteration, args.vertices)
-    
+             # The train_network function needs to be updated to accept/use hidden_dim/num_layers
+             # and instantiate the model correctly.
+             # Placeholder call - ASSUMES train_network is updated elsewhere.
+             train_network(all_examples, args.iteration, args.vertices, args.k, model_dir)
+
     elif args.mode == "evaluate":
-        # Create models
-        current_model = CliqueGNN(num_vertices=args.vertices)
-        best_model = CliqueGNN(num_vertices=args.vertices)
+        print("Running Evaluation Only Mode")
+        # Load current and best models - requires paths and correct instantiation
+        current_model_path = os.path.join(model_dir, f"clique_net_iter{args.iteration}.pth.tar")
+        best_model_path = os.path.join(model_dir, "clique_net.pth.tar")
         
-        # Load models
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        current_model_path = f"./model_data/clique_net_iter{args.iteration}.pth.tar"
-        best_model_path = "./model_data/clique_net.pth.tar"
-        
-        if os.path.exists(current_model_path):
-            current_model.load_state_dict(torch.load(current_model_path, map_location=device)['state_dict'])
-            print(f"Loaded current model from {current_model_path}")
+        if not os.path.exists(current_model_path) or not os.path.exists(best_model_path):
+            print("Error: Both current iteration model and best model must exist for evaluation.")
         else:
-            print(f"Current model not found at {current_model_path}, using random initialization")
-        
-        if os.path.exists(best_model_path):
-            best_model.load_state_dict(torch.load(best_model_path, map_location=device)['state_dict'])
-            print(f"Loaded best model from {best_model_path}")
-        else:
-            print(f"Best model not found at {best_model_path}, using copy of current model")
-            best_model.load_state_dict(current_model.state_dict())
-        
-        # Evaluate
-        win_rate = evaluate_models(current_model, best_model, args.num_games, 
-                                 args.vertices, args.clique_size, args.mcts_sims, args.game_mode)
-        
-        print(f"Win rate: {win_rate:.4f}")
-    
+            # Load current model
+            chk_curr = torch.load(current_model_path, map_location=torch.device('cpu'))
+            curr_hidden = chk_curr.get('hidden_dim', args.hidden_dim)
+            curr_layers = chk_curr.get('num_layers', args.num_layers)
+            current_model = CliqueGNN(args.vertices, hidden_dim=curr_hidden, num_layers=curr_layers)
+            current_model.load_state_dict(chk_curr['state_dict'])
+            current_model.eval()
+            
+            # Load best model
+            chk_best = torch.load(best_model_path, map_location=torch.device('cpu'))
+            best_hidden = chk_best.get('hidden_dim', args.hidden_dim)
+            best_layers = chk_best.get('num_layers', args.num_layers)
+            best_model = CliqueGNN(args.vertices, hidden_dim=best_hidden, num_layers=best_layers)
+            best_model.load_state_dict(chk_best['state_dict'])
+            best_model.eval()
+
+            win_rate = evaluate_models(current_model, best_model, 
+                                     num_games=args.num_games, 
+                                     num_vertices=args.vertices, 
+                                     clique_size=args.k,
+                                     num_mcts_sims=args.mcts_sims, 
+                                     game_mode=args.game_mode)
+            print(f"Evaluation Result (Iter {args.iteration} vs Best): Win Rate = {win_rate:.2f}")
+
     elif args.mode == "play":
-        # Play against AI
-        play_against_ai(args.model_path, args.vertices, args.clique_size, 
-                      args.mcts_sims, args.human_player) 
+        print("Running Play Against AI Mode")
+        # Load the best model
+        model_path = os.path.join(model_dir, "clique_net.pth.tar")
+        if not os.path.exists(model_path):
+            print(f"ERROR: Best model not found at {model_path}")
+        else:
+            checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+            loaded_hidden = checkpoint.get('hidden_dim', args.hidden_dim)
+            loaded_layers = checkpoint.get('num_layers', args.num_layers)
+            model = CliqueGNN(args.vertices, hidden_dim=loaded_hidden, num_layers=loaded_layers)
+            model.load_state_dict(checkpoint['state_dict'])
+            model.eval()
+            
+            play_against_ai(model, args.vertices, args.k, args.mcts_sims, args.game_mode) 

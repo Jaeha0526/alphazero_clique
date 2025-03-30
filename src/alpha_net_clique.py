@@ -243,35 +243,31 @@ class EdgeBlock(nn.Module):
         return out
 
 class CliqueGNN(nn.Module):
-    def __init__(self, num_vertices=6, hidden_dim=64):
+    def __init__(self, num_vertices=6, hidden_dim=64, num_layers=2):
         super().__init__()
         self.hidden_dim = hidden_dim
         
-        # Instead of using Embedding, use a more flexible approach
-        self.node_embedding = nn.Linear(1, hidden_dim)  # Will take node indices as input
-        self.edge_embedding = nn.Linear(3, hidden_dim)  # 3 features for edge state
+        # Input embedding layers
+        self.node_embedding = nn.Linear(1, hidden_dim)  # Assuming node features are just indices initially
+        self.edge_embedding = nn.Linear(3, hidden_dim)  # 3 features for edge state [unselected, p1, p2]
         
-        # Node update layers
-        self.node_layers = nn.ModuleList([
-            GNNBlock(hidden_dim, hidden_dim),
-            GNNBlock(hidden_dim, hidden_dim)
-        ])
-        
-        # Edge update layers
-        self.edge_layers = nn.ModuleList([
-            EdgeBlock(hidden_dim, hidden_dim, hidden_dim),
-            EdgeBlock(hidden_dim, hidden_dim, hidden_dim)
-        ])
+        # Dynamically create GNN layers
+        self.node_layers = nn.ModuleList()
+        self.edge_layers = nn.ModuleList()
+        for _ in range(num_layers):
+            self.node_layers.append(GNNBlock(hidden_dim, hidden_dim))
+            self.edge_layers.append(EdgeBlock(hidden_dim, hidden_dim, hidden_dim))
         
         # Policy head
-        self.policy_head = nn.Linear(hidden_dim, 1)
+        self.policy_head = nn.Linear(hidden_dim, 1) # Outputs score for each edge
         
         # Value head
+        # Input to value head is mean of node features from the last layer
         self.value_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, 1),
-            nn.Tanh()
+            nn.Tanh() # Output between -1 and 1
         )
     
     def forward(self, edge_index, edge_attr, batch=None):
@@ -370,19 +366,24 @@ class CliqueGNN(nn.Module):
         
         # Initialize optimizer with learning rate scheduler
         initial_lr = 0.001
-        min_lr = 0.00001  # Minimum learning rate
+        min_lr = 1e-7  # Minimum learning rate
         optimizer = optim.Adam(self.parameters(), lr=initial_lr)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, 
             mode='min', 
-            factor=0.5, 
-            patience=5, 
+            factor=0.7,  # Less aggressive reduction
+            patience=7,  # Wait longer before reducing
             verbose=True,
-            min_lr=min_lr  # Set minimum learning rate
+            min_lr=min_lr,  # Set minimum learning rate
+            threshold=1e-4,  # Only consider it an improvement if loss decreases by this much
+            threshold_mode='rel'  # Use relative threshold
         )
         
         print(f"Initial learning rate: {initial_lr}")
         print(f"Minimum learning rate: {min_lr}")
+        print(f"Learning rate reduction factor: 0.7")
+        print(f"Patience: 10 epochs")
+        print(f"Improvement threshold: 0.0001 (relative)")
         
         # Create dataset and dataloader
         train_dataset = CliqueGameData(train_examples)
@@ -423,11 +424,18 @@ class CliqueGNN(nn.Module):
                     policy_target = batch.policy.view(num_graphs, -1)  # [num_graphs, num_edges]
                     
                     # Calculate losses
-                    policy_loss = -torch.sum(policy_target * torch.log(policy_output + 1e-8))
+                    # Policy loss: cross-entropy loss averaged over the batch and normalized by number of edges
+                    policy_loss = -torch.mean(torch.sum(policy_target * torch.log(policy_output + 1e-8), dim=1))
+                    
+                    # Value loss: MSE loss averaged over the batch
                     value_loss = F.mse_loss(value_output.squeeze(), batch.value)
                     
+                    # Balance policy and value losses
+                    policy_weight = 1.0
+                    value_weight = 1.0
+                    
                     # Total loss
-                    loss = policy_loss + value_loss
+                    loss = policy_weight * policy_loss + value_weight * value_loss
                     
                     # Check for NaN values
                     if torch.isnan(loss).any():

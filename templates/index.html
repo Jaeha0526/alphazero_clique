@@ -146,7 +146,42 @@
                     <div class="card-header">Game Info</div>
                     <div class="card-body">
                         <div id="game-info">
-                            <p>Start a new game to begin playing!</p>
+                            <p id="game-status-text">Start a new game to begin playing!</p>
+                            <p id="current-player-text"></p>
+                            <p id="move-count-text"></p>
+                            <p id="game-mode-display"></p>
+
+                            <!-- AI Prediction Section -->
+                            <hr>
+                            <h5>AI Prediction</h5>
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="show-ai-prediction">
+                                <label class="form-check-label" for="show-ai-prediction">Show AI Predictions</label>
+                            </div>
+
+                            <div id="ai-model-controls" style="display: none;">
+                                <div class="input-group mb-3">
+                                    <select class="form-select" id="model-select">
+                                        <option selected disabled>Select a compatible model...</option>
+                                    </select>
+                                    <button class="btn btn-outline-secondary" type="button" id="load-model-btn">Load Model</button>
+                                </div>
+                                <div id="model-load-status"></div>
+                            </div>
+
+                            <div id="prediction-info" class="mt-2">
+                                <!-- Predictions will be displayed here -->
+                                <p><i>Enable predictions and load a model to see AI insights.</i></p>
+                            </div>
+                            <!-- End AI Prediction Section -->
+
+                            <!-- Debug Model List Section -->
+                            <hr>
+                            <button class="btn btn-sm btn-info mt-2" id="show-all-models-btn">Show All Found Models</button>
+                            <div id="all-models-list" class="mt-2" style="font-size: 0.85em; max-height: 150px; overflow-y: auto; background-color: #f8f9fa; padding: 5px; border-radius: 4px;">
+                                <!-- List of all found models will appear here -->
+                            </div>
+                            <!-- End Debug Model List Section -->
                         </div>
                     </div>
                 </div>
@@ -189,6 +224,11 @@
         let boardWidth = 0;
         let boardHeight = 0;
         let clickModeEnabled = true;
+        let aiPredictionEnabled = false;
+        let selectedModelFilename = null;
+        let isModelLoaded = false;
+        let currentPolicy = {};
+        let currentValue = 0;
         
         // DOM Elements
         const gameBoard = document.getElementById('game-board');
@@ -205,6 +245,18 @@
         const clickFeedback = document.getElementById('click-feedback');
         const loadingOverlay = document.getElementById('loading-overlay');
         const boardContainer = document.querySelector('.board-container');
+        const gameStatusText = document.getElementById('game-status-text');
+        const currentPlayerText = document.getElementById('current-player-text');
+        const moveCountText = document.getElementById('move-count-text');
+        const gameModeDisplay = document.getElementById('game-mode-display');
+        const showAiPredictionToggle = document.getElementById('show-ai-prediction');
+        const aiModelControls = document.getElementById('ai-model-controls');
+        const modelSelect = document.getElementById('model-select');
+        const loadModelBtn = document.getElementById('load-model-btn');
+        const modelLoadStatus = document.getElementById('model-load-status');
+        const predictionInfoContainer = document.getElementById('prediction-info');
+        const showAllModelsBtn = document.getElementById('show-all-models-btn');
+        const allModelsListContainer = document.getElementById('all-models-list');
         
         // Event Listeners
         newGameBtn.addEventListener('click', startNewGame);
@@ -213,9 +265,15 @@
         gameModeSelect.addEventListener('change', updateGameModeInfo);
         gameBoard.addEventListener('click', handleBoardClick);
         clickModeToggle.addEventListener('change', toggleClickMode);
+        showAiPredictionToggle.addEventListener('change', toggleAiPrediction);
+        loadModelBtn.addEventListener('click', loadSelectedModel);
+        showAllModelsBtn.addEventListener('click', fetchAndDisplayAllModels);
         gameBoard.addEventListener('load', function() {
             boardWidth = gameBoard.clientWidth;
             boardHeight = gameBoard.clientHeight;
+        });
+        document.addEventListener('DOMContentLoaded', (event) => {
+            allModelsListContainer.innerHTML = '';
         });
         
         // Update k-value max based on num-vertices
@@ -249,272 +307,534 @@
         async function handleBoardClick(event) {
             if (!gameActive || !clickModeEnabled) return;
             
-            // Show loading overlay
-            loadingOverlay.style.display = 'flex';
-            
-            // Get click coordinates relative to the board
             const rect = gameBoard.getBoundingClientRect();
-            const x = (event.clientX - rect.left) / rect.width;
-            const y = (event.clientY - rect.top) / rect.height;
+            const scaleX = gameBoard.naturalWidth / rect.width;
+            const scaleY = gameBoard.naturalHeight / rect.height;
             
-            // Show click feedback
-            clickFeedback.style.left = (event.clientX - rect.left) + 'px';
-            clickFeedback.style.top = (event.clientY - rect.top) + 'px';
+            // Coordinates relative to the image top-left
+            const clickX = (event.clientX - rect.left) * scaleX;
+            const clickY = (event.clientY - rect.top) * scaleY;
+
+            // Show visual feedback for the click
+            const feedbackX = event.clientX - rect.left;
+            const feedbackY = event.clientY - rect.top;
+            clickFeedback.style.left = `${feedbackX}px`;
+            clickFeedback.style.top = `${feedbackY}px`;
             clickFeedback.style.display = 'block';
+            setTimeout(() => { clickFeedback.style.display = 'none'; }, 500); // Hide after 0.5s
             
+            // Call backend to find the clicked edge
+            setLoading(true, "Finding edge...");
             try {
-                // Find the closest edge to the click
                 const response = await fetch('/api/click_edge', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        game_id: gameId,
-                        x: x,
-                        y: y,
-                        edge_positions: edgePositions
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        game_id: gameId, 
+                        x: clickX, 
+                        y: clickY,
+                        edge_positions: edgePositions // Send edge positions
                     })
                 });
-                
                 const data = await response.json();
                 
-                if (response.ok) {
-                    // Make a move with the found edge
-                    await makeMove(data.edge[0], data.edge[1]);
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP error! status: ${response.status}`);
+                }
+                
+                // If edge found, make the move
+                if (data.edge) {
+                    await makeMoveApiCall(data.edge);
                 } else {
-                    console.error('Error finding edge:', data.error);
+                    showError("No valid edge found near click point.");
                 }
             } catch (error) {
-                console.error('Error handling click:', error);
+                console.error('Error handling board click:', error);
+                showError(`Click failed: ${error.message}`);
             } finally {
-                // Hide loading overlay and click feedback
-                loadingOverlay.style.display = 'none';
-                setTimeout(() => {
-                    clickFeedback.style.display = 'none';
-                }, 300);
+                setLoading(false);
             }
         }
         
-        // Start a new game
         async function startNewGame() {
+            setLoading(true, "Starting new game...");
             const numVertices = parseInt(numVerticesInput.value);
             const k = parseInt(kValueInput.value);
-            const gameMode = gameModeSelect.value;
-            
+            gameMode = gameModeSelect.value; // Update gameMode from selection
+
             try {
-                loadingOverlay.style.display = 'flex';
-                
                 const response = await fetch('/api/new_game', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ 
-                        num_vertices: numVertices, 
-                        k: k,
-                        game_mode: gameMode
-                    })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ num_vertices: numVertices, k: k, game_mode: gameMode })
                 });
-                
+
                 const data = await response.json();
-                
-                if (response.ok) {
-                    gameId = data.game_id;
-                    gameActive = true;
-                    moveHistory = [];
-                    resetGameBtn.disabled = false;
-                    edgePositions = data.edge_positions;
-                    
-                    // Update UI
-                    gameBoard.src = `data:image/png;base64,${data.board_image}`;
-                    updateGameInfo(data);
-                    displayValidMoves(data.valid_moves);
-                    updateMoveHistory();
-                } else {
-                    alert(`Error: ${data.error}`);
+                if (!response.ok) {
+                   throw new Error(data.error || `HTTP error! status: ${response.status}`);
                 }
+
+                gameId = data.game_id;
+                moveHistory = [];
+                gameActive = true;
+                resetGameBtn.disabled = false;
+
+                updateGameBoard(data.board_image);
+                updateGameInfo(data);
+                updateValidMoves(data.valid_moves);
+                updateMoveHistory();
+                edgePositions = data.edge_positions || []; // Store edge positions
+
+                // --> NEW: Reset AI state for new game
+                showAiPredictionToggle.checked = false; // Reset toggle
+                aiPredictionEnabled = false;
+                resetPredictionState();
+                aiModelControls.style.display = 'none'; // Hide controls
+                // <-- END NEW
+
+                // Reset debug list on new game
+                allModelsListContainer.innerHTML = '';
+
             } catch (error) {
                 console.error('Error starting new game:', error);
-                alert('Failed to start a new game. See console for details.');
+                showError(`Failed to start new game: ${error.message}`);
+                gameActive = false;
+                resetGameBtn.disabled = true;
             } finally {
-                loadingOverlay.style.display = 'none';
+                setLoading(false);
             }
         }
         
-        // Make a move
-        async function makeMove(v1, v2) {
-            if (!gameActive) return;
-            
-            try {
-                loadingOverlay.style.display = 'flex';
-                
-                const response = await fetch('/api/make_move', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        game_id: gameId,
-                        edge: [v1, v2]
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    // Update edge positions
-                    edgePositions = data.edge_positions;
-                    
-                    // Update UI
-                    gameBoard.src = `data:image/png;base64,${data.board_image}`;
-                    updateGameInfo(data);
-                    displayValidMoves(data.valid_moves);
-                    
-                    // Add move to history
-                    const playerNum = data.current_player === 1 ? 2 : 1; // Previous player made the move
-                    moveHistory.push({
-                        player: playerNum,
-                        edge: [v1, v2],
-                        moveNumber: data.move_count
-                    });
-                    updateMoveHistory();
-                    
-                    // Check if game is over
-                    if (data.game_state !== 0) {
-                        gameActive = false;
-                        setTimeout(() => {
-                            let message;
-                            if (data.game_state === 3) {
-                                message = "Game Over! It's a draw!";
-                            } else {
-                                message = `Game Over! Player ${data.game_state} wins!`;
-                            }
-                            alert(message);
-                        }, 100);
-                    }
-                } else {
-                    alert(`Error: ${data.error}`);
-                }
-            } catch (error) {
-                console.error('Error making move:', error);
-                alert('Failed to make move. See console for details.');
-            } finally {
-                loadingOverlay.style.display = 'none';
-            }
-        }
-        
-        // Reset the game
         async function resetGame() {
             if (!gameId) return;
-            
+            setLoading(true, "Resetting game...");
+
             try {
-                loadingOverlay.style.display = 'flex';
-                
-                const response = await fetch(`/api/reset_game/${gameId}`, {
-                    method: 'POST'
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    gameActive = true;
-                    moveHistory = [];
-                    edgePositions = data.edge_positions;
-                    
-                    // Update UI
-                    gameBoard.src = `data:image/png;base64,${data.board_image}`;
-                    updateGameInfo(data);
-                    displayValidMoves(data.valid_moves);
-                    updateMoveHistory();
-                } else {
-                    alert(`Error: ${data.error}`);
-                }
+                const response = await fetch(`/api/reset_game/${gameId}`, { method: 'POST' });
+                 const data = await response.json();
+                 if (!response.ok) {
+                    throw new Error(data.error || `HTTP error! status: ${response.status}`);
+                 }
+
+                moveHistory = [];
+                gameActive = true;
+
+                updateGameBoard(data.board_image);
+                updateGameInfo(data);
+                updateValidMoves(data.valid_moves);
+                updateMoveHistory();
+                edgePositions = data.edge_positions || [];
+
+                 // --> NEW: Reset AI state on game reset
+                 showAiPredictionToggle.checked = false; // Reset toggle
+                 aiPredictionEnabled = false;
+                 resetPredictionState();
+                 aiModelControls.style.display = 'none'; // Hide controls
+                 // <-- END NEW
+
+                // Reset debug list on reset game
+                allModelsListContainer.innerHTML = '';
+
             } catch (error) {
                 console.error('Error resetting game:', error);
-                alert('Failed to reset game. See console for details.');
+                showError(`Failed to reset game: ${error.message}`);
             } finally {
-                loadingOverlay.style.display = 'none';
+                setLoading(false);
             }
         }
         
-        // Update game info display
-        function updateGameInfo(data) {
-            let gameState;
-            if (data.game_state === 0) {
-                gameState = 'Ongoing';
-            } else if (data.game_state === 1) {
-                gameState = 'Player 1 Wins!';
-            } else if (data.game_state === 2) {
-                gameState = 'Player 2 Wins!';
+        // This function is assumed to be called after a move is successfully made
+        function handleMoveResponse(data) {
+             if (!data.error) {
+                // Add move to history (ensure correct format)
+                const player = data.current_player === 1 ? 2 : 1; // Player who *made* the move
+                const move = data.last_move ? `(${data.last_move.join(', ')})` : 'N/A';
+                moveHistory.push({ player: player, move: move });
+
+                updateGameBoard(data.board_image);
+                updateGameInfo(data);
+                updateValidMoves(data.valid_moves);
+                updateMoveHistory();
+                edgePositions = data.edge_positions || [];
+
+                 // --> NEW: Fetch predictions after successful move if AI is enabled
+                 if (aiPredictionEnabled && isModelLoaded) {
+                     fetchAndDisplayPredictions();
+                 }
+                 // <-- END NEW
+
+                 checkGameState(data.game_state); // Check if game ended
+
             } else {
-                gameState = 'Draw';
+                showError(`Invalid Move: ${data.error}`);
+            }
+        }
+
+        // Overhaul updateGameInfo to use specific elements
+        function updateGameInfo(data) {
+            if (!data || gameId === null) { // Check if data is valid and game exists
+                 gameStatusText.textContent = 'Start a new game to begin playing!';
+                 currentPlayerText.textContent = '';
+                 moveCountText.textContent = '';
+                 gameModeDisplay.textContent = '';
+                 return;
             }
             
-            const currentPlayer = data.current_player;
-            const playerColor = currentPlayer === 1 ? 'blue' : 'red';
-            const moveCount = data.move_count;
-            const numVertices = data.num_vertices || numVerticesInput.value;
-            const k = data.k || kValueInput.value;
-            const gameMode = data.game_mode || gameModeSelect.value;
-            
-            let gameModeText = gameMode === 'asymmetric' ? 
-                'Player 1 forms k-clique, Player 2 prevents' : 
-                'Both players try to form k-clique';
-            
-            gameInfoContainer.innerHTML = `
-                <p><strong>Game State:</strong> ${gameState}</p>
-                <p><strong>Current Player:</strong> <span style="color:${playerColor}">Player ${currentPlayer}</span></p>
-                <p><strong>Move Count:</strong> ${moveCount}</p>
-                <p><strong>Vertices:</strong> ${numVertices}</p>
-                <p><strong>k (clique size):</strong> ${k}</p>
-                <p><strong>Game Mode:</strong> ${gameMode.charAt(0).toUpperCase() + gameMode.slice(1)} (${gameModeText})</p>
-            `;
+            // Determine game activity based on state
+            let wasActive = gameActive;
+            gameActive = data.game_state === 0;
+
+            let status = 'Game in progress.';
+            let winner = null;
+            if (!gameActive) { // Game ended
+                if (data.game_state === 3) { // Draw
+                     status = 'Game over: Draw!';
+                } else { // Player 1 or 2 wins
+                    winner = data.game_state;
+                     status = `Game over: Player ${winner} wins!`;
+                }
+            }
+
+            gameStatusText.textContent = status;
+            currentPlayerText.textContent = gameActive ? `Current Player: ${data.current_player}` : '';
+            moveCountText.textContent = `Move Count: ${data.move_count}`;
+            gameModeDisplay.textContent = `Mode: ${data.game_mode} (V=${data.num_vertices}, k=${data.k})`;
+
+             // Update AI Prediction section visibility and content if game ends
+             if (!gameActive && wasActive) { // Only update if game just ended
+                 if (aiPredictionEnabled) {
+                    predictionInfoContainer.innerHTML = `<p><i>Game Over. ${status}</i></p>`;
+                 }
+             }
+             // If game starts/resets, prediction state is handled in startNewGame/resetGame
         }
-        
-        // Display valid moves
-        function displayValidMoves(moves) {
-            if (!moves || moves.length === 0) {
+
+        function setLoading(isLoading, message = "Loading...") {
+             if (isLoading) {
+                 loadingOverlay.style.display = 'flex';
+                 // Optionally update a message within the overlay if needed
+             } else {
+                 loadingOverlay.style.display = 'none';
+             }
+             // Disable/enable buttons during loading
+             newGameBtn.disabled = isLoading;
+             resetGameBtn.disabled = isLoading || !gameActive;
+             loadModelBtn.disabled = isLoading || !aiPredictionEnabled || !modelSelect.value;
+             modelSelect.disabled = isLoading || !aiPredictionEnabled;
+             // Disable game board clicking during loading?
+             // gameBoard.style.pointerEvents = isLoading ? 'none' : 'auto';
+        }
+
+        function showError(message) {
+             // Implement a more user-friendly error display (e.g., a toast notification)
+             console.error("Error:", message);
+             alert(`Error: ${message}`); // Simple alert for now
+        }
+
+        function updateGameBoard(imgData) {
+             gameBoard.src = `data:image/png;base64,${imgData}`;
+        }
+
+        function updateValidMoves(moves) {
+            validMovesContainer.innerHTML = ''; // Clear previous moves
+            if (!gameActive || !moves || moves.length === 0) {
                 validMovesContainer.innerHTML = '<p>No valid moves available.</p>';
                 return;
             }
-            
-            let html = '';
+
+            const ul = document.createElement('ul');
+            ul.className = 'list-unstyled';
             moves.forEach(move => {
-                html += `
-                    <div class="edge-item" onclick="makeMove(${move[0]}, ${move[1]})">
-                        Edge (${move[0]}, ${move[1]})
-                    </div>
-                `;
+                const li = document.createElement('li');
+                li.className = 'edge-item';
+                li.textContent = `(${move[0]}, ${move[1]})`;
+                li.dataset.edge = JSON.stringify(move); // Store edge data
+                li.addEventListener('click', handleValidMoveClick);
+                ul.appendChild(li);
             });
-            
-            validMovesContainer.innerHTML = html;
+            validMovesContainer.appendChild(ul);
         }
-        
-        // Update move history display
+
+         // Add handler for clicking on a valid move in the list
+        async function handleValidMoveClick(event) {
+             if (!gameActive) return;
+             const edge = JSON.parse(event.target.dataset.edge);
+             await makeMoveApiCall(edge);
+        }
+
+
+         async function makeMoveApiCall(edge) {
+             if (!gameActive || !gameId) return;
+             setLoading(true, "Making move...");
+             try {
+                 const response = await fetch('/api/make_move', {
+                     method: 'POST',
+                     headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify({ game_id: gameId, edge: edge })
+                 });
+                 const data = await response.json();
+                 // Check for errors specifically in the make_move response
+                 if (!response.ok || data.error) {
+                     throw new Error(data.error || `Move rejected by server.`);
+                 }
+                 handleMoveResponse(data); // Process the successful response
+             } catch (error) {
+                 console.error('Error making move:', error);
+                 showError(`Failed to make move: ${error.message}`);
+             } finally {
+                 setLoading(false);
+             }
+         }
+
+
         function updateMoveHistory() {
+            moveHistoryContainer.innerHTML = ''; // Clear previous history
             if (moveHistory.length === 0) {
                 moveHistoryContainer.innerHTML = '<p>No moves made yet.</p>';
                 return;
             }
-            
-            let html = '';
-            moveHistory.forEach(move => {
-                const playerClass = move.player === 1 ? 'player1' : 'player2';
-                html += `
-                    <div>
-                        <span class="${playerClass}">Player ${move.player}</span>:
-                        Edge (${move.edge[0]}, ${move.edge[1]})
-                    </div>
-                `;
+
+            const ol = document.createElement('ol');
+            moveHistory.forEach((item, index) => {
+                const li = document.createElement('li');
+                 li.className = item.player === 1 ? 'player1' : 'player2';
+                 li.textContent = `${index + 1}. Player ${item.player} plays ${item.move}`;
+                ol.appendChild(li);
             });
-            
-            moveHistoryContainer.innerHTML = html;
-            moveHistoryContainer.scrollTop = moveHistoryContainer.scrollHeight;
+             moveHistoryContainer.appendChild(ol);
+             // Scroll to bottom
+             moveHistoryContainer.scrollTop = moveHistoryContainer.scrollHeight;
         }
-        
-        // Initialize game mode info on page load
+
+        function checkGameState(state) {
+             if (state !== 0) {
+                // Game state update logic is now primarily in updateGameInfo
+                // This function might be redundant or simplified
+                 let wasActive = gameActive;
+                 gameActive = false; // Ensure gameActive is set correctly
+                 if(wasActive){
+                    // Force UI update if the game just ended
+                    // We can call updateGameInfo again, but it might be called already
+                    // Let's rely on updateGameInfo called from handleMoveResponse
+                 }
+             }
+        }
+
+        function toggleAiPrediction() {
+            aiPredictionEnabled = showAiPredictionToggle.checked;
+            if (aiPredictionEnabled && gameActive) {
+                aiModelControls.style.display = 'block';
+                fetchCompatibleModels();
+                predictionInfoContainer.innerHTML = '<p><i>Select and load a model to see predictions.</i></p>';
+            } else {
+                aiModelControls.style.display = 'none';
+                resetPredictionState(); // Clear model and predictions if disabled
+                predictionInfoContainer.innerHTML = '<p><i>Enable predictions and load a model to see AI insights.</i></p>';
+            }
+        }
+
+        async function fetchCompatibleModels() {
+            if (!gameId) return;
+            setLoading(true, "Fetching models...");
+            modelSelect.innerHTML = '<option selected disabled value="">Loading models...</option>'; // Clear existing options
+
+            try {
+                const response = await fetch(`/api/list_models/${gameId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+
+                modelSelect.innerHTML = '<option selected disabled value="">Select a compatible model...</option>'; // Reset after loading
+
+                if (data.models && data.models.length > 0) {
+                    data.models.forEach(model => {
+                        const option = document.createElement('option');
+                        option.value = model.filename;
+                        option.textContent = model.filename;
+                        modelSelect.appendChild(option);
+                    });
+                    modelLoadStatus.textContent = `${data.models.length} compatible model(s) found.`;
+                } else {
+                    modelLoadStatus.textContent = 'No compatible models found for this game configuration.';
+                }
+            } catch (error) {
+                console.error('Error fetching compatible models:', error);
+                modelSelect.innerHTML = '<option selected disabled value="">Error loading models</option>';
+                modelLoadStatus.textContent = 'Error loading models.';
+                showError('Failed to fetch compatible models.');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function loadSelectedModel() {
+            if (!gameId) return;
+            const selectedFilename = modelSelect.value;
+            if (!selectedFilename) {
+                modelLoadStatus.textContent = 'Please select a model first.';
+                return;
+            }
+
+            setLoading(true, "Loading model...");
+            modelLoadStatus.textContent = `Loading ${selectedFilename}...`;
+            isModelLoaded = false; // Reset load status
+
+            try {
+                const response = await fetch('/api/select_model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ game_id: gameId, model_filename: selectedFilename })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                   throw new Error(data.error || `HTTP error! status: ${response.status}`);
+                }
+
+                modelLoadStatus.textContent = data.message || `Model ${selectedFilename} loaded successfully.`;
+                selectedModelFilename = selectedFilename;
+                isModelLoaded = true;
+                // Fetch initial predictions for the current state
+                fetchAndDisplayPredictions();
+
+            } catch (error) {
+                console.error('Error loading model:', error);
+                modelLoadStatus.textContent = `Error loading model: ${error.message}`;
+                showError(`Failed to load model: ${error.message}`);
+                isModelLoaded = false;
+                selectedModelFilename = null;
+                updatePredictionUI(null, null); // Clear predictions display
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function fetchAndDisplayPredictions() {
+            if (!gameId || !aiPredictionEnabled || !isModelLoaded) {
+                 // Don't try to predict if AI is off, model not loaded, or no game
+                 // Clear display if necessary
+                 if (!isModelLoaded && aiPredictionEnabled) {
+                     predictionInfoContainer.innerHTML = '<p><i>Select and load a model to see predictions.</i></p>';
+                 } else if (!aiPredictionEnabled) {
+                     predictionInfoContainer.innerHTML = '<p><i>Enable predictions and load a model to see AI insights.</i></p>';
+                 }
+                 return;
+            }
+
+            // Optional: Indicate that prediction is happening
+            // predictionInfoContainer.innerHTML = '<p><i>Fetching predictions...</i></p>';
+
+            try {
+                const response = await fetch(`/api/get_prediction/${gameId}`);
+                 if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                currentPolicy = data.policy || {};
+                currentValue = data.value || 0;
+                updatePredictionUI(currentPolicy, currentValue);
+
+            } catch (error) {
+                console.error('Error fetching predictions:', error);
+                predictionInfoContainer.innerHTML = `<p class="text-danger"><i>Prediction failed: ${error.message}</i></p>`;
+                 showError(`Prediction failed: ${error.message}`);
+            }
+        }
+
+        function updatePredictionUI(policy, value) {
+             if (!aiPredictionEnabled) {
+                 predictionInfoContainer.innerHTML = '<p><i>Enable predictions and load a model to see AI insights.</i></p>';
+                 return;
+             }
+             if (!isModelLoaded) {
+                 predictionInfoContainer.innerHTML = '<p><i>Select and load a model to see predictions.</i></p>';
+                 return;
+            }
+             if (policy === null || value === null) {
+                 predictionInfoContainer.innerHTML = '<p><i>No prediction data available.</i></p>';
+                 return;
+             }
+
+            let predictionHtml = `<p><strong>Predicted Value:</strong> ${value.toFixed(3)}</p>`;
+            predictionHtml += '<h6>Policy (Move Probabilities):</h6>';
+
+            const policyItems = Object.entries(policy);
+
+            if (policyItems.length === 0) {
+                predictionHtml += '<p><i>No valid moves or policy data.</i></p>';
+            } else {
+                // Sort by probability descending
+                policyItems.sort(([, probA], [, probB]) => probB - probA);
+
+                predictionHtml += '<ul class="list-unstyled">';
+                policyItems.slice(0, 10).forEach(([moveStr, prob]) => { // Show top 10
+                    predictionHtml += `<li>${moveStr}: ${prob.toFixed(4)}</li>`;
+                });
+                 if (policyItems.length > 10) {
+                     predictionHtml += '<li>... (top 10 shown)</li>';
+                 }
+                predictionHtml += '</ul>';
+            }
+
+            predictionInfoContainer.innerHTML = predictionHtml;
+        }
+
+        function resetPredictionState() {
+            isModelLoaded = false;
+            selectedModelFilename = null;
+            currentPolicy = {};
+            currentValue = 0;
+            modelSelect.innerHTML = '<option selected disabled value="">Select a compatible model...</option>';
+            modelLoadStatus.textContent = '';
+            predictionInfoContainer.innerHTML = '<p><i>Enable predictions and load a model to see AI insights.</i></p>';
+            // Don't disable the checkbox itself, just reset the state it controls
+            // showAiPredictionToggle.checked = false; // Keep user's preference
+            if (!showAiPredictionToggle.checked) {
+                 aiModelControls.style.display = 'none';
+            }
+        }
+
+        // --- NEW: All Models List Function ---
+        async function fetchAndDisplayAllModels() {
+            setLoading(true, "Fetching all models...");
+            allModelsListContainer.innerHTML = '<i>Loading...</i>';
+            try {
+                const response = await fetch('/api/list_all_models');
+                const data = await response.json();
+
+                if (!response.ok || data.error) {
+                    throw new Error(data.error || 'Failed to fetch model list');
+                }
+
+                let listHtml = '<h6>Models Found in playable_models:</h6>';
+                if (data.models && data.models.length > 0) {
+                    listHtml += '<ul class="list-unstyled">';
+                    data.models.forEach(model => {
+                        listHtml += `<li><b>${model.filename}</b> (V=${model.num_vertices}, k=${model.k})</li>`;
+                    });
+                    listHtml += '</ul>';
+                } else {
+                    listHtml += '<p><i>No .pth.tar files found in the directory.</i></p>';
+                }
+                allModelsListContainer.innerHTML = listHtml;
+
+            } catch (error) {
+                console.error('Error fetching all models:', error);
+                allModelsListContainer.innerHTML = `<p class="text-danger"><i>Error fetching list: ${error.message}</i></p>`;
+                showError(`Failed to fetch all models list: ${error.message}`);
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        // Initial setup
+        updateKValueMax();
         updateGameModeInfo();
+        updateGameInfo(null); // Initialize game info display
+
     </script>
 </body>
 </html> 

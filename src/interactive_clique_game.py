@@ -12,6 +12,10 @@ import matplotlib.pyplot as plt
 import networkx as nx
 from clique_board import CliqueBoard
 from visualize_clique import view_clique_board, get_edge_positions
+import torch
+import glob
+from alpha_net_clique import CliqueGNN
+from encoder_decoder_clique import prepare_state_for_network, encode_action, decode_action
 
 # Get the current directory of this script
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,8 +30,23 @@ app = Flask(__name__,
             template_folder=template_dir,
             static_folder=static_dir)
 
+# Define the directory for playable models relative to project root
+playable_model_dir = os.path.join(project_root, 'playable_models')
+# Ensure the directory exists
+os.makedirs(playable_model_dir, exist_ok=True)
+
 # Game instances stored by game_id
 game_instances = {}
+
+# --- Helper Functions --- Start
+
+# Remove the following function definitions:
+# def create_encoder_decoder_for_clique(num_vertices):
+#     ...
+# def prepare_state_for_network(board: CliqueBoard):
+#     ...
+
+# --- Helper Functions --- End
 
 def fig_to_base64(fig):
     """Convert matplotlib figure to base64 string for web display"""
@@ -69,7 +88,11 @@ def new_game():
     
     # Create a new game instance
     board = CliqueBoard(num_vertices, k, game_mode)
-    game_instances[game_id] = board
+    game_instances[game_id] = {
+        'board': board,
+        'model': None,
+        'model_path': None
+    }
     
     # Generate the initial board visualization
     fig, edge_positions = view_clique_board(board, return_edge_positions=True)
@@ -100,7 +123,8 @@ def make_move():
     if game_id not in game_instances:
         return jsonify({'error': 'Invalid game ID'}), 400
     
-    board = game_instances[game_id]
+    game_data = game_instances[game_id]
+    board = game_data['board']
     
     # Check if game is already over
     if board.game_state != 0:
@@ -151,7 +175,7 @@ def click_edge():
     if not edge_positions:
         return jsonify({'error': 'No edge position data provided'}), 400
     
-    board = game_instances[game_id]
+    board = game_instances[game_id]['board']
     valid_moves = board.get_valid_moves()
     
     # Find the closest edge to the click point
@@ -188,7 +212,7 @@ def get_game_state(game_id):
     if game_id not in game_instances:
         return jsonify({'error': 'Invalid game ID'}), 400
     
-    board = game_instances[game_id]
+    board = game_instances[game_id]['board']
     
     # Generate board visualization
     fig, edge_positions = view_clique_board(board, return_edge_positions=True)
@@ -212,14 +236,18 @@ def reset_game(game_id):
     if game_id not in game_instances:
         return jsonify({'error': 'Invalid game ID'}), 400
     
-    board = game_instances[game_id]
+    board = game_instances[game_id]['board']
     num_vertices = board.num_vertices
     k = board.k
     game_mode = board.game_mode
     
     # Create a new board with the same parameters
     new_board = CliqueBoard(num_vertices, k, game_mode)
-    game_instances[game_id] = new_board
+    game_instances[game_id] = {
+        'board': new_board,
+        'model': None,
+        'model_path': None
+    }
     
     # Generate board visualization
     fig, edge_positions = view_clique_board(new_board, return_edge_positions=True)
@@ -234,6 +262,223 @@ def reset_game(game_id):
         'game_mode': new_board.game_mode,
         'edge_positions': edge_positions
     })
+
+@app.route('/api/list_models/<int:game_id>', methods=['GET'])
+def list_models(game_id):
+    """List compatible models for the given game."""
+    if game_id not in game_instances:
+        return jsonify({'error': 'Invalid game ID'}), 400
+
+    game_data = game_instances[game_id]
+    board = game_data['board']
+    current_num_vertices = board.num_vertices
+    current_k = board.k
+
+    compatible_models = []
+    try:
+        # Search for .pth.tar files in the playable_models directory
+        model_files = glob.glob(os.path.join(playable_model_dir, "*.pth.tar"))
+
+        for model_path in model_files:
+            try:
+                # Load only the metadata first to check compatibility
+                checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+                if 'num_vertices' in checkpoint and 'clique_size' in checkpoint:
+                    model_num_vertices = checkpoint['num_vertices']
+                    model_k = checkpoint['clique_size']
+
+                    # Check if model parameters match the current game
+                    if model_num_vertices == current_num_vertices and model_k == current_k:
+                        model_info = {
+                            'filename': os.path.basename(model_path),
+                            'path': model_path,
+                            'num_vertices': model_num_vertices,
+                            'k': model_k
+                        }
+                        compatible_models.append(model_info)
+                else:
+                     print(f"Skipping model {model_path}: Missing configuration (num_vertices or clique_size).")
+
+            except Exception as e:
+                print(f"Error reading metadata from model {model_path}: {e}")
+                continue # Skip problematic files
+
+    except Exception as e:
+        print(f"Error listing models in {playable_model_dir}: {e}")
+        return jsonify({'error': 'Failed to list models'}), 500
+
+    return jsonify({'models': compatible_models})
+
+@app.route('/api/select_model', methods=['POST'])
+def select_model():
+    """Load and select a model for the game."""
+    data = request.json
+    game_id = data.get('game_id')
+    model_filename = data.get('model_filename')
+
+    if game_id not in game_instances:
+        return jsonify({'error': 'Invalid game ID'}), 400
+    if not model_filename:
+        return jsonify({'error': 'Model filename not provided'}), 400
+
+    game_data = game_instances[game_id]
+    board = game_data['board']
+    model_path = os.path.join(playable_model_dir, model_filename)
+
+    if not os.path.exists(model_path):
+         return jsonify({'error': f'Model file not found: {model_filename}'}), 404
+
+    try:
+        # Load the full model checkpoint
+        checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+
+        # Verify compatibility again
+        if 'num_vertices' not in checkpoint or 'clique_size' not in checkpoint:
+             return jsonify({'error': 'Model configuration missing in file.'}), 400
+        if checkpoint['num_vertices'] != board.num_vertices or checkpoint['clique_size'] != board.k:
+            return jsonify({'error': f'Model configuration mismatch. Game: V={board.num_vertices}, k={board.k}. Model: V={checkpoint["num_vertices"]}, k={checkpoint["clique_size"]}.'}), 400
+
+        # Instantiate the model architecture
+        hidden_dim = checkpoint.get('hidden_dim', 64) # Default to 64 if not saved
+        num_layers = checkpoint.get('num_layers', 2)  # Default to 2 if not saved
+        model = CliqueGNN(num_vertices=checkpoint['num_vertices'], hidden_dim=hidden_dim, num_layers=num_layers)
+        model.load_state_dict(checkpoint['state_dict'])
+        model.eval() # Set to evaluation mode
+
+        # Store the loaded model in the game instance
+        game_data['model'] = model
+        game_data['model_path'] = model_path
+
+        print(f"Game {game_id}: Selected model '{model_filename}'")
+        return jsonify({'message': f'Model {model_filename} selected successfully.'})
+
+    except Exception as e:
+        print(f"Error loading model {model_filename} for game {game_id}: {e}")
+        game_data['model'] = None # Clear model if loading failed
+        game_data['model_path'] = None
+        return jsonify({'error': f'Failed to load model: {e}'}), 500
+
+@app.route('/api/get_prediction/<int:game_id>', methods=['GET'])
+def get_prediction(game_id):
+    """Get the AI model's prediction for the current game state."""
+    if game_id not in game_instances:
+        return jsonify({'error': 'Invalid game ID'}), 400
+
+    game_data = game_instances[game_id]
+    board = game_data['board']
+    model = game_data['model']
+
+    if model is None:
+        return jsonify({'error': 'No model selected for this game.'}), 400
+
+    if board.game_state != 0: # No predictions if game is over
+        return jsonify({'policy': {}, 'value': 0.0})
+
+    try:
+        # Prepare the current board state for the network
+        edge_index, edge_attr = prepare_state_for_network(board)
+        
+        # Ensure tensors are on the same device as the model
+        device = next(model.parameters()).device
+        edge_index = edge_index.to(device)
+        edge_attr = edge_attr.to(device)
+
+        # Run inference
+        with torch.no_grad():
+            # Model expects edge_index, edge_attr, and batch assignment
+            # For single inference, batch is just zeros
+            num_nodes = board.num_vertices
+            batch_assignment = torch.zeros(num_nodes, dtype=torch.long, device=device)
+            policy_output, value_output = model(edge_index, edge_attr, batch=batch_assignment)
+
+        # Extract policy and value
+        policy_tensor = policy_output.squeeze(0) # Remove batch dim
+        value = value_output.item()
+
+        # Get valid moves and map policy probabilities
+        valid_moves = board.get_valid_moves()
+        policy_probs = {}
+        total_policy_prob_raw = 0.0 # Sum of probabilities for valid moves from the raw policy output
+
+        for move in valid_moves:
+            move_idx = encode_action(board, move)
+            if 0 <= move_idx < len(policy_tensor):
+                 prob = policy_tensor[move_idx].item()
+                 # Ensure prob is non-negative (should be due to softmax in model, but good check)
+                 prob = max(0.0, prob)
+                 policy_probs[str(tuple(sorted(move)))] = prob # Use sorted tuple as key string
+                 total_policy_prob_raw += prob
+            else:
+                 policy_probs[str(tuple(sorted(move)))] = 0.0 # Assign 0 if index is invalid or out of bounds
+
+        # Normalize probabilities among valid moves
+        normalized_policy_probs = {}
+        if total_policy_prob_raw > 1e-8: # Avoid division by zero
+             for move_key, prob in policy_probs.items():
+                 normalized_policy_probs[move_key] = prob / total_policy_prob_raw
+        else: # If sum is tiny or zero, distribute uniformly
+             num_valid = len(policy_probs)
+             if num_valid > 0:
+                uniform_prob = 1.0 / num_valid
+                for move_key in policy_probs:
+                   normalized_policy_probs[move_key] = uniform_prob
+             else:
+                 normalized_policy_probs = {} # No valid moves, empty policy
+
+        # Value is from the perspective of the current player to play.
+        # No flipping needed based on model definition.
+
+        return jsonify({
+            'policy': normalized_policy_probs, # Dict mapping "(v1, v2)" -> prob
+            'value': value
+        })
+
+    except Exception as e:
+        print(f"Error getting prediction for game {game_id}: {e}")
+        # Potentially clear CUDA cache if it's a CUDA error
+        if "CUDA" in str(e) and torch.cuda.is_available():
+             torch.cuda.empty_cache()
+        return jsonify({'error': f'Prediction failed: {e}'}), 500
+
+@app.route('/api/list_all_models', methods=['GET'])
+def list_all_models():
+    """List ALL models found in the playable_models directory and their params."""
+    all_models_info = []
+    try:
+        model_files = glob.glob(os.path.join(playable_model_dir, "*.pth.tar"))
+        print(f"Found files in {playable_model_dir}: {model_files}") # Debug print
+
+        for model_path in model_files:
+            model_info = {'filename': os.path.basename(model_path)}
+            try:
+                checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+                # Check if keys exist before accessing
+                if 'num_vertices' in checkpoint:
+                    model_info['num_vertices'] = checkpoint['num_vertices']
+                else:
+                     model_info['num_vertices'] = 'Missing'
+
+                if 'clique_size' in checkpoint:
+                    model_info['k'] = checkpoint['clique_size']
+                else:
+                    model_info['k'] = 'Missing'
+
+            except Exception as e:
+                print(f"Error reading metadata from model {model_path}: {e}")
+                model_info['num_vertices'] = 'Error'
+                model_info['k'] = 'Error'
+
+            all_models_info.append(model_info)
+
+    except Exception as e:
+        print(f"Error listing all models in {playable_model_dir}: {e}")
+        # Return error but maybe also partial results if any were collected
+        return jsonify({'error': 'Failed to list all models', 'models': all_models_info}), 500
+
+    if not all_models_info:
+        print(f"No .pth.tar files found in {playable_model_dir}")
+
+    return jsonify({'models': all_models_info})
 
 if __name__ == '__main__':
     # Create templates directory if it doesn't exist
