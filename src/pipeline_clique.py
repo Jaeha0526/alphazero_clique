@@ -267,7 +267,7 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
             win_rate_vs_best = evaluate_models(trained_model, best_model_instance, 
                                        num_games=args.num_games, # Use num_games from args
                                        num_vertices=num_vertices, clique_size=clique_size,
-                                       num_mcts_sims=args.mcts_sims, game_mode=game_mode)
+                                       num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode)
 
     # --- 6b. Evaluate Trained vs Initial --- 
     print("Starting evaluation against initial model (iter0)...")
@@ -296,7 +296,7 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
                 win_rate_vs_initial = evaluate_models(trained_model, initial_model, 
                                            num_games=args.num_games, # Use num_games from args
                                            num_vertices=num_vertices, clique_size=clique_size,
-                                           num_mcts_sims=args.mcts_sims, game_mode=game_mode)
+                                           num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode)
         except Exception as e:
             print(f"ERROR loading or evaluating against initial model: {e}")
             win_rate_vs_initial = -3.0 # Indicate other error
