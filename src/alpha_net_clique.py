@@ -14,6 +14,7 @@ from typing import Tuple, List, Dict, Optional
 import torch_geometric.nn as pyg_nn
 from torch_geometric.data import Data, Batch, DataLoader as PyGDataLoader
 from torch_geometric.utils import to_dense_adj, dense_to_sparse
+import argparse
 
 class CliqueGameData(Dataset):
     def __init__(self, examples):
@@ -259,7 +260,11 @@ class CliqueGNN(nn.Module):
             self.edge_layers.append(EdgeBlock(hidden_dim, hidden_dim, hidden_dim))
         
         # Policy head
-        self.policy_head = nn.Linear(hidden_dim, 1) # Outputs score for each edge
+        self.policy_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1) # Outputs score for each edge
+        )
         
         # Value head
         # Input to value head is mean of node features from the last layer
@@ -405,9 +410,12 @@ class CliqueGNN(nn.Module):
         return policies, values
 
     def train_network(self, train_examples: List, start_iter: int, num_iterations: int, 
-              save_interval: int = 10, device: torch.device = None) -> None:
+              save_interval: int = 10, device: torch.device = None,
+              args: argparse.Namespace = None # Pass args object
+             ) -> None:
         """
         Train the network on the given examples.
+        Expects LR parameters within the args object.
         """
         if device is None:
             device = torch.device("cpu")
@@ -417,26 +425,26 @@ class CliqueGNN(nn.Module):
         self.train()
         
         # Initialize optimizer with learning rate scheduler
-        initial_lr = 0.001
-        # initial_lr = 10
-        min_lr = 1e-7  # Minimum learning rate
+        # Get parameters from args object (with defaults if args is None)
+        initial_lr = getattr(args, 'initial_lr', 0.0001)
+        lr_factor = getattr(args, 'lr_factor', 0.95)
+        lr_patience = getattr(args, 'lr_patience', 7)
+        lr_threshold = getattr(args, 'lr_threshold', 1e-5)
+        min_lr = getattr(args, 'min_lr', 1e-7)
+
+        print(f"Initializing Adam with LR: {initial_lr}") # Log the LR used
         optimizer = optim.Adam(self.parameters(), lr=initial_lr)
+        print(f"Initializing ReduceLROnPlateau with factor={lr_factor}, patience={lr_patience}, threshold={lr_threshold}, min_lr={min_lr}") # Log scheduler params
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, 
             mode='min', 
-            factor=0.7,  # Less aggressive reduction
-            patience=7,  # Wait longer before reducing
+            factor=lr_factor,
+            patience=lr_patience,
             verbose=True,
-            min_lr=min_lr,  # Set minimum learning rate
-            threshold=1e-4,  # Only consider it an improvement if loss decreases by this much
-            threshold_mode='rel'  # Use relative threshold
+            min_lr=min_lr,
+            threshold=lr_threshold,
+            threshold_mode='rel'
         )
-        
-        print(f"Initial learning rate: {initial_lr}")
-        print(f"Minimum learning rate: {min_lr}")
-        print(f"Learning rate reduction factor: 0.7")
-        print(f"Patience: 10 epochs")
-        print(f"Improvement threshold: 0.0001 (relative)")
         
         # Create dataset and dataloader
         train_dataset = CliqueGameData(train_examples)

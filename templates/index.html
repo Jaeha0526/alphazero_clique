@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css">
     <style>
         .game-container {
-            max-width: 1000px;
+            max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
         }
@@ -107,6 +107,31 @@
                         <label class="form-check-label" for="click-mode-toggle">Click-to-move enabled</label>
                     </div>
                 </div>
+                <!-- Moved Valid Moves and Move History back below graph -->
+                <div class="row mt-3">
+                    <div class="col-md-6">
+                        <!-- Valid Moves -->
+                        <div class="card">
+                            <div class="card-header">Valid Moves</div>
+                            <div class="card-body">
+                                <div id="valid-moves" class="edge-list">
+                                    <p>No valid moves available.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <!-- Move History -->
+                        <div class="card">
+                            <div class="card-header">Move History</div>
+                            <div class="card-body">
+                                <div id="move-history" class="move-history">
+                                    <p>No moves made yet.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="col-md-4">
                 <!-- Game Controls -->
@@ -168,6 +193,13 @@
                                 </div>
                                 <div id="model-load-status"></div>
                             </div>
+                            <!-- Add MCTS Simulation Input -->
+                            <div class="input-group mb-3" id="mcts-controls" style="display: none;">
+                                <span class="input-group-text">MCTS Sims:</span>
+                                <input type="number" class="form-control" id="mcts-simulations-input" value="777" min="10" max="10000" step="10">
+                                <button class="btn btn-outline-secondary" type="button" id="run-mcts-btn">Run MCTS</button>
+                            </div>
+                            <!-- End MCTS Simulation Input -->
 
                             <div id="prediction-info" class="mt-2">
                                 <!-- Predictions will be displayed here -->
@@ -182,31 +214,6 @@
                                 <!-- List of all found models will appear here -->
                             </div>
                             <!-- End Debug Model List Section -->
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="row mt-3">
-            <div class="col-md-6">
-                <!-- Valid Moves -->
-                <div class="card">
-                    <div class="card-header">Valid Moves</div>
-                    <div class="card-body">
-                        <div id="valid-moves" class="edge-list">
-                            <p>No valid moves available.</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <!-- Move History -->
-                <div class="card">
-                    <div class="card-header">Move History</div>
-                    <div class="card-body">
-                        <div id="move-history" class="move-history">
-                            <p>No moves made yet.</p>
                         </div>
                     </div>
                 </div>
@@ -229,6 +236,8 @@
         let isModelLoaded = false;
         let currentPolicy = {};
         let currentValue = 0;
+        let currentMctsPolicy = {};
+        let currentMctsQValues = {}; // <-- Add MCTS Q-value state
         
         // DOM Elements
         const gameBoard = document.getElementById('game-board');
@@ -257,6 +266,9 @@
         const predictionInfoContainer = document.getElementById('prediction-info');
         const showAllModelsBtn = document.getElementById('show-all-models-btn');
         const allModelsListContainer = document.getElementById('all-models-list');
+        const mctsControls = document.getElementById('mcts-controls'); // <-- Add MCTS controls div
+        const mctsSimsInput = document.getElementById('mcts-simulations-input'); // <-- Add MCTS input
+        const runMctsBtn = document.getElementById('run-mcts-btn'); // <-- Add MCTS button
         
         // Event Listeners
         newGameBtn.addEventListener('click', startNewGame);
@@ -268,6 +280,7 @@
         showAiPredictionToggle.addEventListener('change', toggleAiPrediction);
         loadModelBtn.addEventListener('click', loadSelectedModel);
         showAllModelsBtn.addEventListener('click', fetchAndDisplayAllModels);
+        runMctsBtn.addEventListener('click', fetchAndDisplayPredictions); // <-- Add listener for MCTS button
         gameBoard.addEventListener('load', function() {
             boardWidth = gameBoard.clientWidth;
             boardHeight = gameBoard.clientHeight;
@@ -521,6 +534,8 @@
              resetGameBtn.disabled = isLoading || !gameActive;
              loadModelBtn.disabled = isLoading || !aiPredictionEnabled || !modelSelect.value;
              modelSelect.disabled = isLoading || !aiPredictionEnabled;
+             mctsSimsInput.disabled = isLoading || !aiPredictionEnabled || !isModelLoaded; // <-- Disable MCTS input
+             runMctsBtn.disabled = isLoading || !aiPredictionEnabled || !isModelLoaded; // <-- Disable MCTS button
              // Disable game board clicking during loading?
              // gameBoard.style.pointerEvents = isLoading ? 'none' : 'auto';
         }
@@ -626,8 +641,10 @@
                 aiModelControls.style.display = 'block';
                 fetchCompatibleModels();
                 predictionInfoContainer.innerHTML = '<p><i>Select and load a model to see predictions.</i></p>';
+                mctsControls.style.display = isModelLoaded ? 'flex' : 'none'; // Show MCTS controls only if model loaded
             } else {
                 aiModelControls.style.display = 'none';
+                mctsControls.style.display = 'none'; // Hide MCTS controls
                 resetPredictionState(); // Clear model and predictions if disabled
                 predictionInfoContainer.innerHTML = '<p><i>Enable predictions and load a model to see AI insights.</i></p>';
             }
@@ -696,55 +713,95 @@
                 modelLoadStatus.textContent = data.message || `Model ${selectedFilename} loaded successfully.`;
                 selectedModelFilename = selectedFilename;
                 isModelLoaded = true;
-                // Fetch initial predictions for the current state
-                fetchAndDisplayPredictions();
+                fetchAndDisplayPredictions(); // This will call updatePredictionUI internally
+                mctsControls.style.display = 'flex';
 
             } catch (error) {
                 console.error('Error loading model:', error);
                 modelLoadStatus.textContent = `Error loading model: ${error.message}`;
                 showError(`Failed to load model: ${error.message}`);
-                isModelLoaded = false;
-                selectedModelFilename = null;
-                updatePredictionUI(null, null); // Clear predictions display
+                updatePredictionUI(null, null, null, null, null); // <-- Pass null for Q-values
             } finally {
                 setLoading(false);
             }
         }
 
         async function fetchAndDisplayPredictions() {
-            if (!gameId || !aiPredictionEnabled || !isModelLoaded) {
-                 // Don't try to predict if AI is off, model not loaded, or no game
+            if (!gameId || !aiPredictionEnabled || !isModelLoaded || !gameActive) { // Also check gameActive
+                 // Don't try to predict if AI is off, model not loaded, or no game/game over
                  // Clear display if necessary
                  if (!isModelLoaded && aiPredictionEnabled) {
                      predictionInfoContainer.innerHTML = '<p><i>Select and load a model to see predictions.</i></p>';
                  } else if (!aiPredictionEnabled) {
                      predictionInfoContainer.innerHTML = '<p><i>Enable predictions and load a model to see AI insights.</i></p>';
+                 } else if (!gameActive && aiPredictionEnabled && isModelLoaded) {
+                     predictionInfoContainer.innerHTML = '<p><i>Game Over. No new predictions.</i></p>';
                  }
                  return;
             }
 
-            // Optional: Indicate that prediction is happening
-            // predictionInfoContainer.innerHTML = '<p><i>Fetching predictions...</i></p>';
+            // Indicate that prediction is happening
+            predictionInfoContainer.innerHTML = '<p><i>Fetching NN & MCTS predictions...</i></p>';
+            setLoading(true, "Fetching predictions..."); // <-- Set loading state
 
             try {
-                const response = await fetch(`/api/get_prediction/${gameId}`);
-                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                const numSimulations = parseInt(mctsSimsInput.value) || 777;
+                if (numSimulations < 10) numSimulations = 10;
+                mctsSimsInput.value = numSimulations;
+
+                // Fetch both predictions concurrently
+                const [nnResponse, mctsResponse] = await Promise.all([
+                    fetch(`/api/get_prediction/${gameId}`),
+                    fetch(`/api/get_mcts_policy/${gameId}?simulations=${numSimulations}`)
+                ]);
+
+                // Process NN Prediction
+                let nnPolicy = null;
+                let nnValue = null;
+                if (nnResponse.ok) {
+                    const nnData = await nnResponse.json();
+                    nnPolicy = nnData.policy || {};
+                    nnValue = nnData.value;
+                } else {
+                     console.error(`NN Prediction failed: ${nnResponse.status}`);
+                     const errorData = await nnResponse.json().catch(() => ({}));
+                     throw new Error(`NN Prediction failed: ${errorData.error || nnResponse.statusText}`);
                 }
-                const data = await response.json();
-                currentPolicy = data.policy || {};
-                currentValue = data.value || 0;
-                updatePredictionUI(currentPolicy, currentValue);
+
+                // Process MCTS Policy AND Q-Values
+                let mctsPolicy = null;
+                let mctsQValues = null; // <-- Variable for Q-values
+                if (mctsResponse.ok) {
+                    const mctsData = await mctsResponse.json();
+                    mctsPolicy = mctsData.policy || {};
+                    mctsQValues = mctsData.q_values || {}; // <-- Extract Q-values
+                } else {
+                     console.error(`MCTS Policy failed: ${mctsResponse.status}`);
+                     const errorData = await mctsResponse.json().catch(() => ({}));
+                     throw new Error(`MCTS Policy failed: ${errorData.error || mctsResponse.statusText}`);
+                }
+
+                // Store results globally
+                currentPolicy = nnPolicy;
+                currentValue = nnValue;
+                currentMctsPolicy = mctsPolicy;
+                currentMctsQValues = mctsQValues; // <-- Store Q-values
+
+                // Update the UI with all results
+                updatePredictionUI(nnPolicy, nnValue, mctsPolicy, numSimulations, mctsQValues); // <-- Pass Q-values
 
             } catch (error) {
                 console.error('Error fetching predictions:', error);
-                predictionInfoContainer.innerHTML = `<p class="text-danger"><i>Prediction failed: ${error.message}</i></p>`;
-                 showError(`Prediction failed: ${error.message}`);
+                predictionInfoContainer.innerHTML = `<p class="text-danger"><i>Prediction fetch failed: ${error.message}</i></p>`;
+                showError(`Prediction failed: ${error.message}`);
+                // Clear UI on error
+                updatePredictionUI(null, null, null, null, null); // <-- Pass null for Q-values
+            } finally {
+                setLoading(false); // <-- Clear loading state
             }
         }
 
-        function updatePredictionUI(policy, value) {
+        function updatePredictionUI(nnPolicy, nnValue, mctsPolicy, numSimulations, mctsQValues) { // <-- Added mctsQValues param
              if (!aiPredictionEnabled) {
                  predictionInfoContainer.innerHTML = '<p><i>Enable predictions and load a model to see AI insights.</i></p>';
                  return;
@@ -753,31 +810,80 @@
                  predictionInfoContainer.innerHTML = '<p><i>Select and load a model to see predictions.</i></p>';
                  return;
             }
-             if (policy === null || value === null) {
+             // Check if all data is missing
+             if (nnPolicy === null && nnValue === null && mctsPolicy === null) { // Keep check simple for now
                  predictionInfoContainer.innerHTML = '<p><i>No prediction data available.</i></p>';
                  return;
              }
 
-            let predictionHtml = `<p><strong>Predicted Value:</strong> ${value.toFixed(3)}</p>`;
-            predictionHtml += '<h6>Policy (Move Probabilities):</h6>';
+            let predictionHtml = '';
 
-            const policyItems = Object.entries(policy);
-
-            if (policyItems.length === 0) {
-                predictionHtml += '<p><i>No valid moves or policy data.</i></p>';
+            // --- Display NN Value ---
+            if (nnValue !== null) {
+                 predictionHtml += `<p><strong>NN Predicted Value:</strong> ${nnValue.toFixed(3)}</p><hr>`;
             } else {
-                // Sort by probability descending
-                policyItems.sort(([, probA], [, probB]) => probB - probA);
+                 predictionHtml += `<p><strong>NN Predicted Value:</strong> N/A</p><hr>`;
+            }
 
-                predictionHtml += '<ul class="list-unstyled">';
-                policyItems.slice(0, 10).forEach(([moveStr, prob]) => { // Show top 10
+            // --- Display Policies Side-by-Side ---
+            predictionHtml += '<div class="row">'; // Use Bootstrap row for columns
+
+            // --- NN Policy Column ---
+            predictionHtml += '<div class="col-md-6">';
+            predictionHtml += '<h6>NN Policy (Direct):</h6>';
+            if (nnPolicy && Object.keys(nnPolicy).length > 0) {
+                const nnPolicyItems = Object.entries(nnPolicy);
+                nnPolicyItems.sort(([, probA], [, probB]) => probB - probA); // Sort desc
+
+                predictionHtml += '<ul class="list-unstyled" style="font-size: 0.8em; max-height: 300px; overflow-y: auto;">'; // Reduced font size
+                nnPolicyItems.forEach(([moveStr, prob]) => {
                     predictionHtml += `<li>${moveStr}: ${prob.toFixed(4)}</li>`;
                 });
-                 if (policyItems.length > 10) {
-                     predictionHtml += '<li>... (top 10 shown)</li>';
-                 }
                 predictionHtml += '</ul>';
+            } else {
+                predictionHtml += '<p><i>N/A</i></p>';
             }
+            predictionHtml += '</div>'; // End NN Policy Column
+
+            // --- MCTS Policy/Q Column ---
+            predictionHtml += '<div class="col-md-6">';
+            const simsLabel = numSimulations ? `(${numSimulations} sims)` : '';
+            predictionHtml += `<h6>MCTS Policy/Q ${simsLabel}:</h6>`;
+            if (mctsPolicy && Object.keys(mctsPolicy).length > 0) {
+                // Combine policy and Q-values for sorting and display
+                const combinedItems = Object.entries(mctsPolicy).map(([moveStr, prob]) => {
+                    const qValue = mctsQValues ? mctsQValues[moveStr] : null;
+                    return { move: moveStr, p: prob, q: qValue };
+                });
+
+                // Sort by probability descending
+                combinedItems.sort((itemA, itemB) => itemB.p - itemA.p);
+
+                predictionHtml += '<ul class="list-unstyled" style="font-size: 0.8em; max-height: 300px; overflow-y: auto;">'; // Reduced font size
+                combinedItems.forEach(item => {
+                    const qStr = (item.q === null || item.q === undefined) ? 'N/A' : item.q.toFixed(3);
+                    predictionHtml += `<li>${item.move}: P=${item.p.toFixed(4)}, Q=${qStr}</li>`; // Display P and Q
+                });
+                predictionHtml += '</ul>';
+            } else {
+                // Still show Q-values even if policy is empty?
+                // Let's check mctsQValues directly if policy empty
+                 if (mctsQValues && Object.keys(mctsQValues).length > 0) {
+                     predictionHtml += '<p><i>Policy N/A. Q-Values:</i></p>';
+                     predictionHtml += '<ul class="list-unstyled" style="font-size: 0.8em; max-height: 300px; overflow-y: auto;">';
+                     // Sort Q-values? Maybe by move string for consistency
+                     const qItems = Object.entries(mctsQValues).filter(([,q]) => q !== null).sort(([moveA], [moveB]) => moveA.localeCompare(moveB));
+                     qItems.forEach(([moveStr, q]) => {
+                         predictionHtml += `<li>${moveStr}: Q=${q.toFixed(3)}</li>`;
+                     });
+                      predictionHtml += '</ul>';
+                 } else {
+                     predictionHtml += '<p><i>N/A</i></p>';
+                 }
+            }
+            predictionHtml += '</div>'; // End MCTS Policy/Q Column
+
+            predictionHtml += '</div>'; // End row
 
             predictionInfoContainer.innerHTML = predictionHtml;
         }
@@ -787,11 +893,12 @@
             selectedModelFilename = null;
             currentPolicy = {};
             currentValue = 0;
+            currentMctsPolicy = {};
+            currentMctsQValues = {}; // <-- Reset MCTS Q-values
             modelSelect.innerHTML = '<option selected disabled value="">Select a compatible model...</option>';
             modelLoadStatus.textContent = '';
-            predictionInfoContainer.innerHTML = '<p><i>Enable predictions and load a model to see AI insights.</i></p>';
-            // Don't disable the checkbox itself, just reset the state it controls
-            // showAiPredictionToggle.checked = false; // Keep user's preference
+            mctsControls.style.display = 'none';
+            updatePredictionUI(null, null, null, null, null); // <-- Pass null for Q-values
             if (!showAiPredictionToggle.checked) {
                  aiModelControls.style.display = 'none';
             }

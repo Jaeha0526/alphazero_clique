@@ -123,15 +123,21 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
     
     return win_rate
 
-def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int, 
-                 clique_size: int, mcts_sims: int, eval_threshold: float,
-                 hidden_dim: int, num_layers: int,
-                 num_cpus: int = 4, game_mode: str = "symmetric",
-                 data_dir: str = "./datasets/clique", model_dir: str = "./model_data") -> None:
-    """Run one iteration of the AlphaZero pipeline"""
+def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model_dir: str) -> Dict[str, float]:
+    """Run one iteration of the AlphaZero pipeline, return metrics."""
     print(f"=== Starting iteration {iteration} ===")
     
-    # Set device (used for evaluation, training device set in train_network)
+    # Access parameters from args object
+    num_vertices = args.vertices
+    clique_size = args.k
+    hidden_dim = args.hidden_dim
+    num_layers = args.num_layers
+    mcts_sims = args.mcts_sims
+    game_mode = args.game_mode
+    num_cpus = args.num_cpus
+    num_self_play_games = args.self_play_games
+    eval_threshold = args.eval_threshold
+
     eval_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using evaluation device: {eval_device}")
     print(f"Model Config: V={num_vertices}, k={clique_size}, hidden_dim={hidden_dim}, num_layers={num_layers}")
@@ -140,7 +146,7 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     model_to_load_path = None
     prev_model_path = f"{model_dir}/clique_net_iter{iteration-1}.pth.tar"
     best_model_path = f"{model_dir}/clique_net.pth.tar"
-    current_model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar" # Path where train_network will save
+    current_model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar"
 
     if iteration > 0 and os.path.exists(prev_model_path):
         model_to_load_path = prev_model_path
@@ -215,9 +221,8 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     print("Starting training process...")
     # train_network will load the previous model (iter N-1 or best) internally based on iteration number
     # and save the result as iter N.
-    avg_policy_loss, avg_value_loss = train_network(all_examples, iteration, num_vertices, clique_size, model_dir, 
-                                                  hidden_dim, num_layers)
-    print("Training process finished.")
+    avg_policy_loss, avg_value_loss = train_network(all_examples, iteration, num_vertices, clique_size, model_dir, args)
+    print(f"Training process finished. Val Policy Loss: {avg_policy_loss:.4f}, Val Value Loss: {avg_value_loss:.4f}")
     
     # --- Remove Save After Training --- 
     # current_model = current_model.cpu() # No single 'current_model' instance used throughout
@@ -235,147 +240,313 @@ def run_iteration(iteration: int, num_self_play_games: int, num_vertices: int,
     trained_model.eval()
     print("Loaded trained model.")
 
-    # --- 6. Evaluate --- 
+    # --- 6. Evaluate Trained vs Best --- 
     print("Starting evaluation against best model...")
-    win_rate = 0.0 # Default win rate if no best model exists yet
+    win_rate_vs_best = 0.0 # Default win rate if no best model exists yet
     best_model_instance = None
 
     if not os.path.exists(best_model_path):
          print("No best model found. Current model will become the best model.")
-         win_rate = 1.0 # Treat as 100% win rate if no opponent
+         win_rate_vs_best = 1.0 # Treat as 100% win rate if no opponent
     else:
         print(f"Loading best model for comparison: {best_model_path}")
         checkpoint_best = torch.load(best_model_path, map_location=eval_device)
-        # Optional: Verify params in checkpoint_best match args
-        best_hidden = checkpoint_best.get('hidden_dim', hidden_dim)
-        best_layers = checkpoint_best.get('num_layers', num_layers)
-        # Instantiate best_model correctly
-        best_model_instance = CliqueGNN(num_vertices, hidden_dim=best_hidden, num_layers=best_layers).to(eval_device)
-        best_model_instance.load_state_dict(checkpoint_best['state_dict'])
-        best_model_instance.eval()
-        print("Loaded best model.")
+        # Verify configuration match before evaluation
+        if checkpoint_best.get('num_vertices') != num_vertices or \
+           checkpoint_best.get('clique_size') != clique_size:
+             print("ERROR: Best model configuration does not match current settings. Skipping evaluation.")
+             win_rate_vs_best = -1.0 # Indicate configuration mismatch
+        else:
+            best_hidden = checkpoint_best.get('hidden_dim', hidden_dim)
+            best_layers = checkpoint_best.get('num_layers', num_layers)
+            best_model_instance = CliqueGNN(num_vertices, hidden_dim=best_hidden, num_layers=best_layers).to(eval_device)
+            best_model_instance.load_state_dict(checkpoint_best['state_dict'])
+            best_model_instance.eval()
+            
+            # Run evaluation games
+            win_rate_vs_best = evaluate_models(trained_model, best_model_instance, 
+                                       num_games=args.num_games, # Use num_games from args
+                                       num_vertices=num_vertices, clique_size=clique_size,
+                                       num_mcts_sims=args.mcts_sims, game_mode=game_mode)
 
-        # Run evaluation using evaluate_models function
-        win_rate = evaluate_models(trained_model, best_model_instance, num_games=10, # Consider making num_games an arg
-                                 num_vertices=num_vertices, clique_size=clique_size,
-                                 num_mcts_sims=mcts_sims, game_mode=game_mode)
-        print(f"Evaluation win rate: {win_rate:.2f}")
+    # --- 6b. Evaluate Trained vs Initial --- 
+    print("Starting evaluation against initial model (iter0)...")
+    win_rate_vs_initial = -2.0 # Default: not evaluated
+    initial_model_path = f"{model_dir}/clique_net_iter0.pth.tar"
     
-    # --- 7. Update Best Model --- 
-    if win_rate > eval_threshold:
-        print(f"Trained model is better (win rate: {win_rate:.2f} > {eval_threshold:.2f}). Updating best model.")
-        # Save the winning model's checkpoint data (which includes params)
-        # We can just re-save the checkpoint we loaded for evaluation
-        torch.save(checkpoint_eval, best_model_path)
-        print(f"Best model updated at {best_model_path}")
+    if not os.path.exists(initial_model_path):
+        print("Initial model (iter0) not found. Skipping evaluation against initial.")
     else:
-        print(f"Trained model is not better (win rate: {win_rate:.2f} <= {eval_threshold:.2f}). Keeping previous best model.")
-        # No need to save anything here
+        try:
+            checkpoint_initial = torch.load(initial_model_path, map_location=eval_device)
+            # Verify configuration match before evaluation
+            if checkpoint_initial.get('num_vertices') != num_vertices or \
+               checkpoint_initial.get('clique_size') != clique_size:
+                 print("ERROR: Initial model configuration does not match current settings. Skipping evaluation against initial.")
+                 win_rate_vs_initial = -1.0 # Indicate configuration mismatch
+            else:
+                initial_hidden = checkpoint_initial.get('hidden_dim', hidden_dim)
+                initial_layers = checkpoint_initial.get('num_layers', num_layers)
+                initial_model = CliqueGNN(num_vertices, hidden_dim=initial_hidden, num_layers=initial_layers).to(eval_device)
+                initial_model.load_state_dict(checkpoint_initial['state_dict'])
+                initial_model.eval()
+                print("Loaded initial model for comparison.")
+                
+                # Run evaluation games (trained vs initial)
+                win_rate_vs_initial = evaluate_models(trained_model, initial_model, 
+                                           num_games=args.num_games, # Use num_games from args
+                                           num_vertices=num_vertices, clique_size=clique_size,
+                                           num_mcts_sims=args.mcts_sims, game_mode=game_mode)
+        except Exception as e:
+            print(f"ERROR loading or evaluating against initial model: {e}")
+            win_rate_vs_initial = -3.0 # Indicate other error
 
-    # --- 8. Log Results --- 
-    # ... (logging logic remains largely the same, using avg_policy_loss, avg_value_loss from train_network) ...
+    # --- 7. Update Best Model (based on win_rate_vs_best) --- 
+    if win_rate_vs_best > eval_threshold:
+        print(f"New model is better (Win Rate vs Best: {win_rate_vs_best:.4f} > {eval_threshold}). Updating best model.")
+        # Save the current trained model as the new best model
+        save_best = {
+            'state_dict': trained_model.state_dict(),
+            'num_vertices': num_vertices,
+            'clique_size': clique_size,
+            'hidden_dim': hidden_dim,
+            'num_layers': num_layers
+        }
+        torch.save(save_best, best_model_path)
+    else:
+        print(f"New model is not better (Win Rate vs Best: {win_rate_vs_best:.4f} <= {eval_threshold}). Keeping previous best model.")
 
-def run_pipeline(iterations: int = 5, self_play_games: int = 10, 
-                num_vertices: int = 6, clique_size: int = 3,
-                mcts_sims: int = 500, hidden_dim: int = 64, num_layers: int = 2,
-                num_cpus: int = 1, game_mode: str = "symmetric", 
-                eval_threshold: float = 0.55,
-                experiment_name: str = "default") -> None:
+    print(f"=== Iteration {iteration} finished ===")
+    
+    # Return collected metrics
+    return {
+        "iteration": iteration,
+        "validation_policy_loss": avg_policy_loss,
+        "validation_value_loss": avg_value_loss,
+        "evaluation_win_rate_vs_best": win_rate_vs_best,
+        "evaluation_win_rate_vs_initial": win_rate_vs_initial # Add new metric
+    }
+
+def run_pipeline(args: argparse.Namespace) -> None:
     """
-    Run the full AlphaZero pipeline for the Clique Game.
+    Run the full AlphaZero training pipeline using parameters from args.
     
     Args:
-        iterations: Number of iterations to run
-        self_play_games: Number of self-play games per iteration
-        num_vertices: Number of vertices in the graph
-        clique_size: Size of clique needed to win
-        mcts_sims: Number of MCTS simulations per move
-        num_cpus: Number of CPUs to use for parallel self-play
-        game_mode: "symmetric" or "asymmetric" game mode
-        experiment_name: Name of the experiment for organizing data and models
+        args: Parsed command line arguments from argparse.
     """
-    print(f"Starting pipeline with {iterations} iterations")
-    print(f"Self-play games per iteration: {self_play_games}")
-    print(f"Using {num_cpus} CPUs for parallel self-play")
-    print(f"Experiment name: {experiment_name}")
+    start_time = time.time()
     
-    # Create experiment-specific directories
-    data_dir = f"./datasets/clique/{experiment_name}"
-    model_dir = f"./model_data/{experiment_name}"
+    # Define directories based on experiment name
+    base_dir = f"./experiments/{args.experiment_name}"
+    data_dir = os.path.join(base_dir, "datasets")
+    model_dir = os.path.join(base_dir, "models")
+    log_file_path = os.path.join(base_dir, "training_log.json")
+    
+    # Create directories if they don't exist
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
     
-    # Run iterations
-    for iteration in range(iterations):
-        print(f"\nStarting iteration {iteration+1}/{iterations}")
-        
-        # Run iteration with experiment-specific directories, passing new params
-        run_iteration(iteration, self_play_games, num_vertices, 
-                     clique_size, mcts_sims, eval_threshold,
-                     hidden_dim, num_layers,
-                     num_cpus, game_mode, data_dir, model_dir)
-        
-        # Move files to experiment-specific directories
-        # Move game data
-        for file in glob.glob("./datasets/clique/*.pkl"):
-            if f"_iter{iteration}" in file:
-                new_file = file.replace("./datasets/clique/", f"{data_dir}/")
-                os.rename(file, new_file)
-        
-        # Move model files
-        for file in glob.glob("./model_data/*.pth.tar"):
-            if f"iter{iteration}" in file or "clique_net.pth.tar" in file:
-                new_file = file.replace("./model_data/", f"{model_dir}/")
-                os.rename(file, new_file)
-        
-        print(f"Iteration {iteration+1} completed")
-        
-        # Wait before next iteration
-        if iteration < iterations - 1:
-            print("Waiting 10 seconds before next iteration...")
-            time.sleep(10)
-    
-    print("\nPipeline completed successfully!")
+    print(f"Starting pipeline for experiment: {args.experiment_name}")
+    print(f"Data Dir: {data_dir}")
+    print(f"Model Dir: {model_dir}")
+    print(f"Log File: {log_file_path}")
 
-def plot_learning_curve(num_iterations: int):
+    # --- Load existing log data or initialize --- 
+    log_data = {"hyperparameters": {}, "log": []} # Initialize with new structure
+    if os.path.exists(log_file_path):
+        try:
+            with open(log_file_path, 'r') as f:
+                loaded_data = json.load(f)
+                # Check if loaded data is in the new dictionary format
+                if isinstance(loaded_data, dict) and "hyperparameters" in loaded_data and "log" in loaded_data:
+                    log_data = loaded_data
+                    print(f"Loaded existing log data with {len(log_data['log'])} entries.")
+                elif isinstance(loaded_data, list):
+                    # Handle old list format (optional, maybe just warn/error)
+                    print("Warning: Old log format detected. Converting to new format, but hyperparameters will be missing for previous runs.")
+                    log_data["log"] = loaded_data
+                else:
+                    print(f"Warning: Unknown format in log file {log_file_path}. Starting fresh log.")
+        except json.JSONDecodeError:
+            print(f"Warning: Could not decode existing log file {log_file_path}. Starting fresh log.")
+        except Exception as e:
+            print(f"Warning: Error loading log file {log_file_path}: {e}. Starting fresh log.")
+    else:
+        print("No existing log file found. Creating new log.")
+
+    # --- Store Hyperparameters --- 
+    # Store only if not already present (e.g., loading an existing log)
+    if not log_data["hyperparameters"]:
+        print("Storing hyperparameters in log file.")
+        log_data["hyperparameters"] = {
+            "experiment_name": args.experiment_name,
+            "vertices": args.vertices,
+            "k": args.k,
+            "game_mode": args.game_mode,
+            "iterations": args.iterations,
+            "self_play_games": args.self_play_games,
+            "mcts_sims": args.mcts_sims,
+            "num_cpus": args.num_cpus,
+            "eval_threshold": args.eval_threshold,
+            "num_games": args.num_games,
+            "hidden_dim": args.hidden_dim,
+            "num_layers": args.num_layers,
+            "initial_lr": args.initial_lr,
+            "lr_factor": args.lr_factor,
+            "lr_patience": args.lr_patience,
+            "lr_threshold": args.lr_threshold,
+            "min_lr": args.min_lr
+        }
+        # Save immediately after storing hyperparameters for a new file
+        if not os.path.exists(log_file_path):
+             try:
+                 with open(log_file_path, 'w') as f:
+                     json.dump(log_data, f, indent=4)
+             except Exception as e:
+                 print(f"ERROR: Could not save initial log file with hyperparameters: {e}")
+
+    # Determine starting iteration based on log data
+    start_iteration = log_data["log"][-1]["iteration"] + 1 if log_data["log"] else 0
+    print(f"Starting from iteration: {start_iteration}")
+    
+    # Run training iterations
+    for iteration in range(start_iteration, start_iteration + args.iterations):
+        iteration_metrics = run_iteration(iteration, args, data_dir, model_dir)
+                                       
+        # --- Append metrics to log data["log"] and save --- 
+        if iteration_metrics:
+            log_list = log_data["log"]
+            # Check if this iteration already exists in the log list
+            existing_entry = next((item for item in log_list if item["iteration"] == iteration), None)
+            if existing_entry:
+                existing_entry.update(iteration_metrics)
+            else:
+                log_list.append(iteration_metrics)
+            
+            # Save the entire log_data dictionary
+            try:
+                with open(log_file_path, 'w') as f:
+                    json.dump(log_data, f, indent=4) # Save the whole dict
+                print(f"Saved updated log to {log_file_path}")
+                # Plot the curve after saving the log for this iteration
+                if len(log_list) >= 2: 
+                    plot_learning_curve(log_file_path)
+            except Exception as e:
+                print(f"ERROR: Could not save log file {log_file_path}: {e}")
+        else:
+            print(f"Iteration {iteration} did not return metrics (likely skipped). Not logging.")
+            
+        # Optional: Add delay or check for conditions before next iteration
+        time.sleep(2) # Small delay
+        
+    end_time = time.time()
+    print(f"\nPipeline finished in {(end_time - start_time):.2f} seconds.")
+    
+    if log_data["log"]:
+        plot_learning_curve(log_file_path) 
+
+def plot_learning_curve(log_file_path: str):
     """
-    Plot the learning curve based on evaluation results.
+    Plot validation policy and value loss curves from the training log.
     
     Args:
-        num_iterations: Number of iterations to include
+        log_file_path: Path to the training_log.json file.
     """
-    iterations = []
-    win_rates = []
-    
-    # Load evaluation results
-    for i in range(num_iterations):
-        results_file = f"./model_data/evaluation_results_iter{i}.txt"
-        if not os.path.exists(results_file):
-            continue
-            
-        with open(results_file, "r") as f:
-            lines = f.readlines()
-            win_rate = float(lines[0].split(": ")[1])
-            iterations.append(i)
-            win_rates.append(win_rate)
-    
-    if len(iterations) <= 1:
-        print("Not enough data to plot learning curve")
+    if not os.path.exists(log_file_path):
+        print(f"Log file not found at {log_file_path}. Cannot plot learning curve.")
         return
+        
+    try:
+        with open(log_file_path, 'r') as f:
+            loaded_data = json.load(f)
+            # Expect dictionary format now
+            if not isinstance(loaded_data, dict) or "log" not in loaded_data:
+                print("Log file is not in the expected format (missing 'log' key).")
+                return
+            log_list = loaded_data["log"] # Get the list of log entries
+            hyperparams = loaded_data.get("hyperparameters", {}) # Get hyperparams if they exist
+
+    except Exception as e:
+        print(f"Error loading or parsing log file {log_file_path}: {e}")
+        return
+
+    if not isinstance(log_list, list) or len(log_list) < 2:
+        print("Not enough data points in log file to plot learning curve.")
+        return
+
+    # Extract data from the log_list
+    plot_data = [
+        (entry["iteration"], entry["validation_policy_loss"], entry["validation_value_loss"], entry.get("evaluation_win_rate_vs_initial"))
+        for entry in log_list
+        if entry.get("validation_policy_loss") is not None and entry.get("validation_value_loss") is not None
+    ]
     
-    # Plot
-    plt.figure(figsize=(10, 6))
-    plt.plot(iterations, win_rates, 'o-', linewidth=2, markersize=8)
-    plt.axhline(y=0.5, color='r', linestyle='--', alpha=0.5)
-    plt.grid(True, alpha=0.3)
-    plt.xlabel('Iteration', fontsize=14)
-    plt.ylabel('Win Rate vs Previous Best', fontsize=14)
-    plt.title('AlphaZero Clique Game Learning Curve', fontsize=16)
-    plt.tight_layout()
+    # Separate into lists, handling None for win_rate_initial if missing
+    iterations = [p[0] for p in plot_data]
+    policy_losses = [p[1] for p in plot_data]
+    value_losses = [p[2] for p in plot_data]
+    win_rates_initial = [p[3] if p[3] is not None and p[3] >= 0 else np.nan for p in plot_data] # Replace errors/missing with NaN
+
+    if len(iterations) < 2:
+        print("Not enough valid data points (with losses) in log file to plot learning curve.")
+        return
+        
+    # --- Plotting --- 
+    # Use 3 axes now: one for iterations, one for losses, one for win rate
+    fig, ax1 = plt.subplots(figsize=(12, 8)) # Slightly larger figure
+
+    # Plot Policy Loss (Axis 1)
+    color = 'tab:red'
+    ax1.set_xlabel('Iteration', fontsize=14)
+    ax1.set_ylabel('Validation Policy Loss', color=color, fontsize=14)
+    ax1.plot(iterations, policy_losses, color=color, marker='o', linestyle='-', linewidth=2, markersize=5, label='Policy Loss')
+    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.grid(True, axis='y', linestyle='--', alpha=0.6)
+    ax1.legend(loc='upper left')
+
+    # Create a second y-axis for Value Loss (Axis 2)
+    ax2 = ax1.twinx()
+    color = 'tab:blue'
+    ax2.set_ylabel('Validation Value Loss', color=color, fontsize=14)
+    ax2.plot(iterations, value_losses, color=color, marker='s', linestyle='--', linewidth=2, markersize=5, label='Value Loss')
+    ax2.tick_params(axis='y', labelcolor=color)
+    ax2.legend(loc='upper right')
     
-    # Save plot
-    plt.savefig(f"./model_data/learning_curve_{datetime.datetime.today().strftime('%Y-%m-%d')}.png")
-    plt.close()
+    # Create a third y-axis for Win Rate vs Initial (Axis 3)
+    # Need to shift this axis slightly to avoid overlap with ax2
+    ax3 = ax1.twinx()
+    ax3.spines['right'].set_position(('outward', 60)) # Offset the right spine
+    color = 'tab:green'
+    ax3.set_ylabel('Win Rate vs Initial', color=color, fontsize=14)
+    # Connect only non-NaN points for the win rate
+    ax3.plot(iterations, win_rates_initial, color=color, marker='^', linestyle=':', linewidth=2, markersize=6, label='Win Rate vs Initial')
+    ax3.tick_params(axis='y', labelcolor=color)
+    ax3.set_ylim(-0.05, 1.05) # Set y-limit for win rate
+    ax3.legend(loc='lower left')
+
+    # Add title with some hyperparameters
+    title = f"Training Losses & Win Rate vs Initial\n"
+    title += f"Exp: {hyperparams.get('experiment_name', 'N/A')}, V={hyperparams.get('vertices', '?')}, k={hyperparams.get('k', '?')}, MCTS={hyperparams.get('mcts_sims', '?')}\n"
+    title += f"LR={hyperparams.get('initial_lr', '?')}, Factor={hyperparams.get('lr_factor', '?')}, Patience={hyperparams.get('lr_patience', '?')}"
+    plt.title(title, fontsize=12) # Adjust font size maybe
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to prevent title overlap
+    
+    # Combine legends (might get cluttered, alternative is multiple legends)
+    # lines, labels = ax1.get_legend_handles_labels()
+    # lines2, labels2 = ax2.get_legend_handles_labels()
+    # lines3, labels3 = ax3.get_legend_handles_labels()
+    # ax1.legend(lines + lines2 + lines3, labels + labels2 + labels3, loc='lower center', bbox_to_anchor=(0.5, -0.15), ncol=3)
+
+    # Save plot in the same directory as the log file with a fixed name
+    plot_dir = os.path.dirname(log_file_path)
+    # Use a fixed filename to overwrite the plot each iteration
+    plot_filename = os.path.join(plot_dir, f"training_losses.png")
+    try:
+        plt.savefig(plot_filename)
+        print(f"Learning curve saved to {plot_filename}")
+    except Exception as e:
+        print(f"Error saving plot: {e}")
+    plt.close(fig) # Close the figure to free memory
 
 def play_against_ai(model_path: str = None, num_vertices: int = 6, clique_size: int = 3, 
                    num_mcts_sims: int = 200, human_player: int = 0):
@@ -503,35 +674,34 @@ if __name__ == "__main__":
     parser.add_argument("--num-cpus", type=int, default=4, help="Number of CPUs for parallel self-play")
     parser.add_argument("--experiment-name", type=str, default="default", help="Name for organizing data/models")
     
-    # Model parameters (New)
+    # Model parameters
     parser.add_argument("--hidden-dim", type=int, default=64, help="Hidden dimension size in GNN layers")
     parser.add_argument("--num-layers", type=int, default=2, help="Number of GNN layers in the model")
     
+    # Add LR Scheduler Hyperparameters
+    parser.add_argument("--initial-lr", type=float, default=0.0001, help="Initial learning rate for Adam")
+    parser.add_argument("--lr-factor", type=float, default=0.95, help="LR reduction factor for ReduceLROnPlateau")
+    parser.add_argument("--lr-patience", type=int, default=7, help="LR patience for ReduceLROnPlateau")
+    parser.add_argument("--lr-threshold", type=float, default=1e-5, help="LR threshold for ReduceLROnPlateau")
+    parser.add_argument("--min-lr", type=float, default=1e-7, help="Minimum learning rate for ReduceLROnPlateau")
+
     # Specific mode parameters (can add more if needed, e.g., model paths for evaluate/play)
     parser.add_argument("--iteration", type=int, default=0, help="Iteration number (for train mode)")
-    parser.add_argument("--num-games", type=int, default=10, help="Number of games (for evaluate/play modes)")
+    parser.add_argument("--num-games", type=int, default=31, help="Number of games (for evaluate/play modes)")
+    parser.add_argument("--eval-mcts-sims", type=int, default=50, help="Number of MCTS simulations (for evaluate/play modes)")
 
     args = parser.parse_args()
 
     # Create base directories
-    data_base_dir = f"./datasets/clique/{args.experiment_name}"
-    model_dir = f"./model_data/{args.experiment_name}"
+    data_base_dir = f"./experiments/{args.experiment_name}/datasets"
+    model_dir = f"./experiments/{args.experiment_name}/models"
     os.makedirs(data_base_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
     # Execute selected mode
     if args.mode == "pipeline":
-        run_pipeline(iterations=args.iterations, 
-                     self_play_games=args.self_play_games, 
-                     num_vertices=args.vertices, 
-                     clique_size=args.k,
-                     mcts_sims=args.mcts_sims, 
-                     hidden_dim=args.hidden_dim,
-                     num_layers=args.num_layers,
-                     num_cpus=args.num_cpus,
-                     game_mode=args.game_mode, 
-                     eval_threshold=args.eval_threshold,
-                     experiment_name=args.experiment_name)
+        # Pass the whole args object
+        run_pipeline(args)
                      
     elif args.mode == "selfplay":
         print("Running Self-Play Only Mode")

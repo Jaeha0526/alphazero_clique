@@ -23,62 +23,54 @@ import argparse
 @dataclass
 class UCTNode:
     game: CliqueBoard
-    move: Optional[int]
+    move: Optional[int] # Move taken TO reach this node
     parent: Optional['UCTNode']
+    number_visits: float = 0.0 # Visits TO this node (N(s))
     is_expanded: bool = False
     children: Dict[int, 'UCTNode'] = None
-    child_priors: np.ndarray = None
-    child_total_value: np.ndarray = None
-    child_number_visits: np.ndarray = None
-    action_idxes: List[int] = None
+    child_priors: np.ndarray = None # P(s, a) from NN for children
+    child_number_visits: np.ndarray = None # N(s, a) for children
+    child_total_value: np.ndarray = None # W(s, a) for children
+    action_idxes: List[int] = None # Valid action indices from this node
 
     def __post_init__(self):
         if self.children is None:
             self.children = {}
         
-        # Calculate number of edges in the complete graph
         num_vertices = self.game.num_vertices
         num_edges = num_vertices * (num_vertices - 1) // 2
         
         if self.child_priors is None:
             self.child_priors = np.zeros([num_edges], dtype=np.float32)
-        if self.child_total_value is None:
-            self.child_total_value = np.zeros([num_edges], dtype=np.float32)
+        # Initialize child stats arrays
         if self.child_number_visits is None:
             self.child_number_visits = np.zeros([num_edges], dtype=np.float32)
+        if self.child_total_value is None:
+            self.child_total_value = np.zeros([num_edges], dtype=np.float32)
         if self.action_idxes is None:
             self.action_idxes = []
     
-    @property
-    def number_visits(self) -> float:
-        return self.parent.child_number_visits[self.move]
-
-    @number_visits.setter
-    def number_visits(self, value: float) -> None:
-        self.parent.child_number_visits[self.move] = value
-    
-    @property
-    def total_value(self) -> float:
-        return self.parent.child_total_value[self.move]
-    
-    @total_value.setter
-    def total_value(self, value: float) -> None:
-        self.parent.child_total_value[self.move] = value
-    
     def child_Q(self) -> np.ndarray:
-        # Add small epsilon to avoid division by zero
-        return self.child_total_value / (1 + self.child_number_visits)
+        """Calculate Q-values for children using this node's internal stats."""
+        # Read from self's arrays, using (1 + N) denominator
+        return self.child_total_value / (1.0 + self.child_number_visits)
     
     def child_U(self) -> np.ndarray:
-        # Exploration term with safety for division
-        return math.sqrt(max(1, self.number_visits)) * (
-            abs(self.child_priors) / (1 + self.child_number_visits))
-    
+        """Calculate Exploration bonus U for children."""
+        # Use self.number_visits (visits TO this node) for sqrt(N(s))
+        # Use self.child_number_visits for N(s,a) in denominator
+        sqrt_N_s = math.sqrt(max(1.0, self.number_visits))
+        return sqrt_N_s * (abs(self.child_priors) / (1.0 + self.child_number_visits))
+
     def best_child(self) -> int:
+        # This should now work correctly with the internal stats
         if self.action_idxes:
-            bestmove = self.child_Q() + self.child_U()
-            bestmove = self.action_idxes[np.argmax(bestmove[self.action_idxes])]
+            bestmove_scores = self.child_Q() + self.child_U()
+            # Select best score among valid action indices
+            best_valid_idx = np.argmax(bestmove_scores[self.action_idxes])
+            bestmove = self.action_idxes[best_valid_idx]
         else:
+            # Fallback if action_idxes not populated (shouldn't happen in normal search)
             bestmove = np.argmax(self.child_Q() + self.child_U())
         return bestmove
     
@@ -89,125 +81,122 @@ class UCTNode:
             current = current.maybe_add_child(best_move)
         return current
     
-    def add_dirichlet_noise(self, action_idxs: List[int], child_priors: np.ndarray) -> np.ndarray:
-        """Add Dirichlet noise to the child priors at the root node for exploration"""
-        if len(action_idxs) <= 1:
+    def add_dirichlet_noise(self, action_idxs: List[int], child_priors: np.ndarray, noise_weight: float = 0.25) -> np.ndarray:
+        """Add Dirichlet noise to the child priors at the root node for exploration."""
+        # Skip noise if weight is zero or not enough actions
+        if noise_weight <= 0 or len(action_idxs) <= 1:
             return child_priors
-            
+
         try:
             # Extract the valid child priors
             valid_child_priors = child_priors[action_idxs]
-            
-            # Generate Dirichlet noise
-            noise = np.random.dirichlet([0.3] * len(action_idxs))
-            
-            # Mix the priors with noise
-            valid_child_priors = 0.75 * valid_child_priors + 0.25 * noise
-            
+
+            # Generate Dirichlet noise (alpha=0.3 is common)
+            noise_alpha = 0.3
+            noise = np.random.dirichlet([noise_alpha] * len(action_idxs))
+
+            # Mix the priors with noise using the provided weight
+            valid_child_priors = (1 - noise_weight) * valid_child_priors + noise_weight * noise
+
             # Put the modified priors back
             child_priors[action_idxs] = valid_child_priors
         except Exception as e:
+            print(f"Warning: Error adding Dirichlet noise: {e}") # Add warning
+            # Return original priors if error occurs
             pass
-        
+
         return child_priors
-        
-    def expand(self, child_priors: np.ndarray) -> None:
+
+    def expand(self, child_priors: np.ndarray, noise_weight: float = 0.25) -> None:
+        """Expand the node using network priors, optionally adding noise if root."""
         self.is_expanded = True
         action_idxs = []
-        c_p = child_priors.copy()
+        c_p = child_priors.copy() # Use the passed priors
         
-        # Get all valid moves
         valid_moves = self.game.get_valid_moves()
-        
         for edge in valid_moves:
             move_idx = ed.encode_action(self.game, edge)
-            if move_idx >= 0:  # Only add valid encoded moves
+            if move_idx >= 0:
                 action_idxs.append(move_idx)
                 
         if not action_idxs:
-            self.is_expanded = False
+            self.is_expanded = False # Cannot expand if no valid moves
             return
             
         self.action_idxes = action_idxs
         
-        # Zero out invalid moves
-        c_p[~np.isin(np.arange(len(c_p)), action_idxs)] = 0.0
+        # --- Normalize passed priors and store in self.child_priors ---
+        mask = np.zeros_like(c_p, dtype=bool)
+        mask[action_idxs] = True
+        c_p[~mask] = 0.0 # Zero out invalid moves
         
-        # Normalize valid move probabilities
-        valid_probs = c_p[action_idxs]
-        
-        if valid_probs.sum() > 0:
-            valid_probs = valid_probs / valid_probs.sum()
-            c_p[action_idxs] = valid_probs
+        valid_sum = c_p[mask].sum()
+        if valid_sum > 1e-8:
+            c_p[mask] = c_p[mask] / valid_sum # Normalize
         else:
-            # If no valid probabilities, use uniform distribution
-            c_p[action_idxs] = 1.0 / len(action_idxs)
-        
-        # Check if this is the root node (has DummyNode as parent)
-        is_root = isinstance(self.parent, DummyNode)
-        
-        # Only add Dirichlet noise at the root of the search tree
-        if is_root:
-            c_p = self.add_dirichlet_noise(action_idxs, c_p)
+            # If sum is zero (e.g., network predicts 0 for all valid), use uniform
+            uniform_prob = 1.0 / len(action_idxs)
+            c_p[mask] = uniform_prob
             
-        # Set child priors
+        # Add noise if this is the root node (parent is None)
+        if self.parent is None and noise_weight > 0:
+            c_p = self.add_dirichlet_noise(action_idxs, c_p, noise_weight)
+            
+        # Set the child priors for this node
         self.child_priors = c_p
-    
-    def make_move_on_board(self, board: CliqueBoard, move: int) -> CliqueBoard:
-        """Make a move on the board given by move index"""
-        edge = ed.decode_action(board, move)
-        if edge != (-1, -1):
-            board.make_move(edge)
-        return board
+        # Note: child_number_visits and child_total_value start at 0
             
     def maybe_add_child(self, move: int) -> 'UCTNode':
         if move not in self.children:
             copy_board = copy.deepcopy(self.game)
-            copy_board = self.make_move_on_board(copy_board, move)
+            copy_board = make_move_on_board(copy_board, move)
             self.children[move] = UCTNode(
                 copy_board, move, parent=self)
         return self.children[move]
     
     def backup(self, value_estimate: float) -> None:
-        current = self
-        while current.parent is not None:
-            current.number_visits += 1
-            # Flip value for player 1 vs player 2 perspective
-            if current.game.player == 0:  # Player 1's perspective (next move is Player 2)
-                current.total_value += value_estimate
-            else:  # Player 2's perspective (next move is Player 1)
-                current.total_value += -value_estimate
-            current = current.parent
+        """Propagate the estimated value up the tree, updating stats."""
+        node = self
+        # value_estimate is always from P1's perspective
+        
+        while node is not None: 
+            # Increment visits TO this node
+            node.number_visits += 1
+            
+            # Update stats in the PARENT node for the move leading to THIS node
+            parent_node = node.parent
+            if parent_node is not None:
+                move_idx = node.move # The move taken from parent to reach this node
+                if move_idx is not None:
+                    # Add value from the perspective of the player whose turn it was AT THE PARENT node
+                    value_to_add = value_estimate if parent_node.game.player == 0 else -value_estimate
+                    parent_node.child_total_value[move_idx] += value_to_add
+                    parent_node.child_number_visits[move_idx] += 1 # Increment parent's child visit count
+            
+            # Move up the tree for the next iteration
+            node = parent_node
 
-class DummyNode:
-    def __init__(self):
-        self.parent = None
-        self.child_total_value = collections.defaultdict(float)
-        self.child_number_visits = collections.defaultdict(float)
-
-def UCT_search(game_state: CliqueBoard, num_reads: int, net: nn.Module) -> Tuple[int, UCTNode]:
+def UCT_search(game_state: CliqueBoard, num_reads: int, net: nn.Module,
+               noise_weight: float = 0.25) -> Tuple[int, UCTNode]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = net.to(device)  # Ensure model is on the correct device
+    net = net.to(device)
     
-    # Create root node with DummyNode as parent
-    root = UCTNode(game_state, move=None, parent=DummyNode())
+    # Create root node with parent=None
+    root = UCTNode(game_state, move=None, parent=None)
     
     for i in range(num_reads):
         try:
             leaf = root.select_leaf()
             
-            # Convert board to network input
             state_dict = ed.prepare_state_for_network(leaf.game)
             edge_index = state_dict['edge_index'].to(device)
             edge_attr = state_dict['edge_attr'].to(device)
             
             with torch.no_grad():
                 child_priors, value_estimate = net(edge_index, edge_attr)
-                # Reshape child_priors to be 1D array
                 child_priors = child_priors.cpu().numpy().squeeze()
                 value_estimate = value_estimate.item()
                 
-            # Check if game is over or if there are no valid moves
             if leaf.game.game_state != 0 or not leaf.game.get_valid_moves():
                 # If game is over, use the game result for backup
                 if leaf.game.game_state == 1:  # Player 1 wins
@@ -220,48 +209,67 @@ def UCT_search(game_state: CliqueBoard, num_reads: int, net: nn.Module) -> Tuple
                 leaf.backup(value)
                 continue
                 
-            # Expand the leaf node
-            leaf.expand(child_priors)
+            # Expand the leaf node, passing noise weight
+            # expand now correctly sets self.child_priors
+            leaf.expand(child_priors, noise_weight)
+            # Backup the value estimate from the network
             leaf.backup(value_estimate)
             
         except Exception as e:
-            # Continue with next iteration to keep the search robust
+            print(f"Error during MCTS simulation {i}: {e}") # Added print
             continue
         
-    # Find the move with the most visits
-    if len(root.child_number_visits) > 0:
-        best_move = np.argmax(root.child_number_visits)
+    # Find the move with the most visits, using the root's internal stats
+    if root.action_idxes: # Check if root was expanded and has valid actions
+        # Use root.child_number_visits array
+        valid_visits = root.child_number_visits[root.action_idxes]
+        best_action_local_idx = np.argmax(valid_visits)
+        best_move = root.action_idxes[best_action_local_idx]
         return best_move, root
     else:
-        # No valid moves, return a random valid move if any
+        # Root expansion failed or no valid moves, return a random valid move if any
         valid_moves = game_state.get_valid_moves()
         if valid_moves:
             move_idx = ed.encode_action(game_state, random.choice(valid_moves))
             return move_idx, root
         else:
-            return 0, root
+            # No valid moves from the start
+            num_edges = game_state.num_vertices * (game_state.num_vertices - 1) // 2
+            return 0 % num_edges, root # Return a default valid index (e.g., 0) if possible
 
+# --- Restore standalone helper function --- 
 def make_move_on_board(board: CliqueBoard, move: int) -> CliqueBoard:
     """Make a move on the board given by move index"""
     edge = ed.decode_action(board, move)
     if edge != (-1, -1):
         board.make_move(edge)
     return board
+# --- End restored helper function ---
 
 def get_policy(root: UCTNode) -> np.ndarray:
-    num_vertices = root.game.num_vertices
-    num_edges = num_vertices * (num_vertices - 1) // 2
-    
+    """Calculates the policy based on visit counts stored in the root node."""
+    num_edges = len(root.child_priors) # Use length of priors array for size
     policy = np.zeros([num_edges], dtype=np.float32)
-    valid_indices = np.where(root.child_number_visits != 0)[0]
-    if len(valid_indices) > 0:
-        policy[valid_indices] = root.child_number_visits[valid_indices] / root.child_number_visits.sum()
     
-    # Apply valid moves mask to ensure only valid moves are considered
+    # Use root.child_number_visits array directly
+    visits = root.child_number_visits
+    total_visits = visits.sum()
+    
+    if total_visits > 0:
+        policy = visits / total_visits
+    
+    # Apply valid moves mask
     mask = ed.get_valid_moves_mask(root.game)
     policy = ed.apply_valid_moves_mask(policy, mask)
-    
     return policy
+
+def get_q_values(root: UCTNode) -> np.ndarray:
+    """Calculates the Q-values for all potential actions from the root."""
+    # Use root's internal stats arrays
+    q_values = root.child_total_value / (1.0 + root.child_number_visits)
+    # Set Q for unvisited moves explicitly? The division yields 0/1=0, which is fine.
+    # Q for invalid moves will also be 0.
+    return q_values
 
 def save_as_pickle(filename: str, data: List) -> None:
     """Save data to a pickle file.
@@ -290,7 +298,8 @@ def load_pickle(filename: str) -> List:
 def MCTS_self_play(clique_net: nn.Module, num_games: int, 
                    num_vertices: int = 6, clique_size: int = 3, cpu: int = 0,
                    mcts_sims: int = 500, game_mode: str = "symmetric",
-                   iteration: int = 0, data_dir: str = "./datasets/clique") -> None:
+                   iteration: int = 0, data_dir: str = "./datasets/clique",
+                   noise_weight: float = 0.25) -> None:
     """
     Run self-play games using MCTS and save the games.
     
@@ -304,6 +313,7 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
         game_mode: "symmetric" or "asymmetric" game mode
         iteration: Current iteration number
         data_dir: Directory to save game data
+        noise_weight: Weight for Dirichlet noise during self-play (0 to disable)
     """
     print(f"Starting self-play on CPU {cpu} for iteration {iteration}")
     
@@ -331,8 +341,8 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
             print(f"Current player: {'Player 1' if board.player == 0 else 'Player 2'}")
             print(board)
             
-            # Get best move using MCTS
-            best_move, root = UCT_search(board, mcts_sims, clique_net)
+            # Get best move using MCTS, passing noise weight
+            best_move, root = UCT_search(board, mcts_sims, clique_net, noise_weight=noise_weight)
             
             # Get policy from root node (MCTS)
             mcts_policy = get_policy(root)
@@ -409,6 +419,7 @@ if __name__ == "__main__":
     parser.add_argument("--mcts-sims", type=int, default=500, help="Number of MCTS simulations per move")
     parser.add_argument("--cpu", type=int, default=0, help="CPU index for multiprocessing")
     parser.add_argument("--game-mode", type=str, default="symmetric", help="Game mode: symmetric or asymmetric")
+    parser.add_argument("--noise-weight", type=float, default=0.25, help="Weight for Dirichlet noise during self-play (0 to disable)")
     
     args = parser.parse_args()
     
@@ -430,5 +441,5 @@ if __name__ == "__main__":
     net = net.cpu()
     net.share_memory()
     
-    # Start self-play process
-    MCTS_self_play(net, args.num_games, args.vertices, args.clique_size, args.cpu, args.mcts_sims, args.game_mode) 
+    # Start self-play process, passing noise weight from args
+    MCTS_self_play(net, args.num_games, args.vertices, args.clique_size, args.cpu, args.mcts_sims, args.game_mode, noise_weight=args.noise_weight) 

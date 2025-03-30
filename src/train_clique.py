@@ -16,6 +16,7 @@ import random
 from torch_geometric.data import DataLoader as PyGDataLoader
 from alpha_net_clique import CliqueGameData
 import torch.nn.functional as F
+import argparse
 
 def load_examples(folder_path: str, iteration: int = None) -> List:
     """
@@ -57,7 +58,7 @@ def load_examples(folder_path: str, iteration: int = None) -> List:
     return all_examples
 
 def train_network(all_examples: List, iteration: int, num_vertices: int, clique_size: int, model_dir: str, 
-                   hidden_dim: int = 64, num_layers: int = 2) -> Tuple[float, float]:
+                   args: argparse.Namespace) -> Tuple[float, float]:
     """
     Train the network on the given examples.
     
@@ -67,8 +68,7 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
         num_vertices: Number of vertices in the graph
         clique_size: Size of clique needed to win
         model_dir: Directory to save models
-        hidden_dim: Hidden dimension size for GNN layers
-        num_layers: Number of GNN layers
+        args: Parsed command line arguments (contains hidden_dim, num_layers, LR params)
         
     Returns:
         Tuple of (avg_policy_loss, avg_value_loss) from validation
@@ -78,6 +78,9 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     train_examples = all_examples[:train_size]
     val_examples = all_examples[train_size:]
     
+    # Access model parameters from args
+    hidden_dim = args.hidden_dim
+    num_layers = args.num_layers
     print(f"Training on {len(train_examples)} examples, validating on {len(val_examples)} examples")
     print(f"Model Config: hidden_dim={hidden_dim}, num_layers={num_layers}")
     
@@ -102,19 +105,19 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     
     # Train the network
     print("Starting training...")
-    # Calculate number of iterations based on dataset size
-    # Use 30 epochs with batch size of 16
     num_iterations = max(1, (len(train_examples) // 16) * 30)
     
     # First try training on CPU if we hit CUDA errors
     try:
-        net.train_network(train_examples, 0, num_iterations)
+        # Pass the whole args object to the network's training method
+        net.train_network(train_examples, 0, num_iterations, args=args)
     except RuntimeError as e:
         if "CUDA" in str(e):
             print("CUDA error occurred, trying to train on CPU instead...")
             cpu_device = torch.device("cpu")
             net.to(cpu_device)
-            net.train_network(train_examples, 0, num_iterations, device=cpu_device)
+            # Pass args object for CPU training too
+            net.train_network(train_examples, 0, num_iterations, device=cpu_device, args=args)
         else:
             raise e
     
@@ -226,8 +229,7 @@ def train_pipeline(iterations: int = 5, num_vertices: int = 6, data_dir: str = "
         print(f"Loaded {len(all_examples)} examples for iteration {iteration}")
         
         # 2. Train network on current iteration's examples
-        train_network(all_examples, iteration, num_vertices, clique_size, model_dir, 
-                      hidden_dim, num_layers)
+        train_network(all_examples, iteration, num_vertices, clique_size, model_dir, args)
         
         # 3. Wait before next iteration to allow for self-play
         if iteration < iterations - 1:
@@ -238,23 +240,33 @@ def train_pipeline(iterations: int = 5, num_vertices: int = 6, data_dir: str = "
     print("Training pipeline completed successfully.")
 
 if __name__ == "__main__":
-    import argparse
-    
+    # If this script is run directly, it needs its own argparse setup
+    # matching the parameters expected by train_network (or use defaults)
+    # Example:
     parser = argparse.ArgumentParser(description="Train AlphaZero for Clique Game (Standalone)")
-    parser.add_argument("--iterations", type=int, default=5, help="Number of iterations to run")
-    parser.add_argument("--vertices", type=int, default=6, help="Number of vertices in the graph")
+    parser.add_argument("--iteration", type=int, required=True, help="Iteration number to train")
+    parser.add_argument("--vertices", type=int, default=6, help="Number of vertices")
     parser.add_argument("--k", type=int, default=3, help="Clique size")
     parser.add_argument("--hidden-dim", type=int, default=64, help="GNN hidden dimension")
     parser.add_argument("--num-layers", type=int, default=2, help="Number of GNN layers")
-    parser.add_argument("--data-dir", type=str, default="./datasets/clique", help="Directory for datasets")
-    parser.add_argument("--model-dir", type=str, default="./model_data", help="Directory for models")
-
+    parser.add_argument("--data-dir", type=str, default="./datasets/clique", help="Dir for datasets")
+    parser.add_argument("--model-dir", type=str, default="./model_data", help="Dir for models")
+    # Add necessary LR args if running standalone
+    parser.add_argument("--initial-lr", type=float, default=0.0001)
+    parser.add_argument("--lr-factor", type=float, default=0.95)
+    parser.add_argument("--lr-patience", type=int, default=7)
+    parser.add_argument("--lr-threshold", type=float, default=1e-5)
+    parser.add_argument("--min-lr", type=float, default=1e-7)
+    
     args = parser.parse_args()
 
     # Create output directories
     os.makedirs(args.model_dir, exist_ok=True)
     os.makedirs(args.data_dir, exist_ok=True)
 
-    # Start the training pipeline, passing new args
-    train_pipeline(args.iterations, args.vertices, args.data_dir, args.model_dir, args.k, 
-                   args.hidden_dim, args.num_layers) 
+    print(f"Running Standalone Training for Iteration {args.iteration}")
+    all_examples = load_examples(args.data_dir, args.iteration)
+    if all_examples:
+        train_network(all_examples, args.iteration, args.vertices, args.k, args.model_dir, args)
+    else:
+        print("No examples found, skipping training.") 

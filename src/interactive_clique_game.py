@@ -16,6 +16,9 @@ import torch
 import glob
 from alpha_net_clique import CliqueGNN
 from encoder_decoder_clique import prepare_state_for_network, encode_action, decode_action
+import numpy as np
+from MCTS_clique import UCT_search, get_policy, get_q_values
+import time
 
 # Get the current directory of this script
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -439,6 +442,98 @@ def get_prediction(game_id):
         if "CUDA" in str(e) and torch.cuda.is_available():
              torch.cuda.empty_cache()
         return jsonify({'error': f'Prediction failed: {e}'}), 500
+
+@app.route('/api/get_mcts_policy/<int:game_id>', methods=['GET'])
+def get_mcts_policy(game_id):
+    """Get the MCTS policy prediction and Q-values after a specified number of simulations."""
+    # Get number of simulations from query parameter, default to 777
+    num_simulations = request.args.get('simulations', default=777, type=int)
+
+    if game_id not in game_instances:
+        return jsonify({'error': 'Invalid game ID'}), 400
+
+    game_data = game_instances[game_id]
+    board = game_data['board']
+    model = game_data['model']
+
+    if model is None:
+        return jsonify({'error': 'No model selected for this game.'}), 400
+
+    if board.game_state != 0: # No predictions if game is over
+        return jsonify({'policy': {}})
+
+    try:
+        # Run MCTS search
+        print(f"Starting MCTS search for game {game_id} with {num_simulations} simulations...")
+        start_time = time.time()
+        # Ensure the board copy is used if necessary, MCTS might modify the board state internally
+        # However, UCT_search seems to handle copying internally via copy.deepcopy(self.game)
+        # Disable Dirichlet noise for interactive prediction by setting noise_weight=0.0
+        # Pass the requested number of simulations
+        _best_move, root_node = UCT_search(board, num_simulations, model, noise_weight=0.0)
+        end_time = time.time()
+        print(f"MCTS search completed in {end_time - start_time:.2f} seconds.")
+
+        # Get the policy from the root node visit counts
+        mcts_policy_array = get_policy(root_node)
+        # Get the Q-values from the root node
+        mcts_q_array = get_q_values(root_node)
+
+        # Convert policy array to dictionary format { "(v1, v2)": probability }
+        policy_dict = {}
+        q_value_dict = {} # <-- Dictionary for Q-values
+        valid_moves = board.get_valid_moves() # Get currently valid moves
+
+        # --- Populate Policy and Q-value Dictionaries ---
+        # Include all possible edges to show Q-values for unvisited/invalid ones too
+        # Generate all possible edges directly instead of calling a non-existent method
+        num_vertices = board.num_vertices
+        for i in range(num_vertices):
+            for j in range(i + 1, num_vertices):
+                move = (i, j) # Create the edge tuple
+                move_str = str(tuple(sorted(move))) # Use sorted tuple for consistency
+                move_idx = encode_action(board, move)
+
+                # Get Policy Probability (only for valid moves, from get_policy result)
+                # Check if the generated move is in the set of valid moves
+                is_valid = move in valid_moves or (j, i) in valid_moves
+                if 0 <= move_idx < len(mcts_policy_array) and is_valid:
+                     prob = mcts_policy_array[move_idx]
+                     policy_dict[move_str] = max(0.0, float(prob))
+                elif is_valid:
+                     policy_dict[move_str] = 0.0
+                # else: Invalid moves won't be added to policy_dict
+
+                # Get Q-Value
+                if 0 <= move_idx < len(mcts_q_array):
+                    q_val = mcts_q_array[move_idx]
+                    # Convert numpy NaN/float if necessary
+                    q_value_dict[move_str] = None if np.isnan(q_val) else float(q_val)
+                else:
+                    # Should not happen if array size is correct
+                    q_value_dict[move_str] = None
+
+        # Re-normalize policy dictionary just in case (Q-values are not normalized)
+        total_prob = sum(policy_dict.values())
+        if total_prob > 1e-6:
+            for move_key in policy_dict:
+                policy_dict[move_key] /= total_prob
+        elif len(policy_dict) > 0:
+             uniform_prob = 1.0 / len(policy_dict)
+             for move_key in policy_dict:
+                 policy_dict[move_key] = uniform_prob
+
+        return jsonify({
+            'policy': policy_dict,
+            'q_values': q_value_dict # <-- Add Q-values to response
+        })
+
+    except Exception as e:
+        print(f"Error getting MCTS policy for game {game_id}: {e}")
+        # Potentially clear CUDA cache if it's a CUDA error
+        if "CUDA" in str(e) and torch.cuda.is_available():
+             torch.cuda.empty_cache()
+        return jsonify({'error': f'MCTS Prediction failed: {e}'}), 500
 
 @app.route('/api/list_all_models', methods=['GET'])
 def list_all_models():

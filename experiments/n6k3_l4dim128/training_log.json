@@ -1,0 +1,58 @@
+[
+    {
+        "iteration": 0,
+        "validation_policy_loss": 2.7093049049377442,
+        "validation_value_loss": 4.971785983798327e-06,
+        "evaluation_win_rate_vs_best": 1.0,
+        "evaluation_win_rate_vs_initial": 0.6451612903225806
+    },
+    {
+        "iteration": 1,
+        "validation_policy_loss": 2.7095237255096434,
+        "validation_value_loss": 0.1392257958650589,
+        "evaluation_win_rate_vs_best": 0.5161290322580645,
+        "evaluation_win_rate_vs_initial": 0.5806451612903226
+    },
+    {
+        "iteration": 2,
+        "validation_policy_loss": 2.7143873301419346,
+        "validation_value_loss": 0.019863396883010864,
+        "evaluation_win_rate_vs_best": 0.6451612903225806,
+        "evaluation_win_rate_vs_initial": 0.7096774193548387
+    },
+    {
+        "iteration": 3,
+        "validation_policy_loss": 2.711123069127401,
+        "validation_value_loss": 1.6973353922367096e-07,
+        "evaluation_win_rate_vs_best": 0.45161290322580644,
+        "evaluation_win_rate_vs_initial": 0.6451612903225806
+    },
+    {
+        "iteration": 4,
+        "validation_policy_loss": 2.7069047027164035,
+        "validation_value_loss": 0.0671553686261177,
+        "evaluation_win_rate_vs_best": 0.45161290322580644,
+        "evaluation_win_rate_vs_initial": 0.45161290322580644
+    },
+    {
+        "iteration": 5,
+        "validation_policy_loss": 2.7111739582485623,
+        "validation_value_loss": 2.2371752947947243e-06,
+        "evaluation_win_rate_vs_best": 0.6451612903225806,
+        "evaluation_win_rate_vs_initial": 0.5161290322580645
+    },
+    {
+        "iteration": 6,
+        "validation_policy_loss": 2.707298696041107,
+        "validation_value_loss": 4.681375287418632e-10,
+        "evaluation_win_rate_vs_best": 0.45161290322580644,
+        "evaluation_win_rate_vs_initial": 0.41935483870967744
+    },
+    {
+        "iteration": 7,
+        "validation_policy_loss": 2.7248433113098143,
+        "validation_value_loss": 5.6843418860808015e-12,
+        "evaluation_win_rate_vs_best": 0.41935483870967744,
+        "evaluation_win_rate_vs_initial": 0.4838709677419355
+    }
+]

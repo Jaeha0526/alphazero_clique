@@ -1,0 +1,22 @@
+{
+    "hyperparameters": {
+        "experiment_name": "n6k3_l4dim128_2",
+        "vertices": 6,
+        "k": 3,
+        "game_mode": "symmetric",
+        "iterations": 50,
+        "self_play_games": 18,
+        "mcts_sims": 555,
+        "num_cpus": 6,
+        "eval_threshold": 0.55,
+        "num_games": 31,
+        "hidden_dim": 128,
+        "num_layers": 4,
+        "initial_lr": 0.0001,
+        "lr_factor": 0.95,
+        "lr_patience": 7,
+        "lr_threshold": 1e-05,
+        "min_lr": 1e-07
+    },
+    "log": []
+}
