@@ -395,7 +395,9 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "lr_factor": args.lr_factor,
             "lr_patience": args.lr_patience,
             "lr_threshold": args.lr_threshold,
-            "min_lr": args.min_lr
+            "min_lr": args.min_lr,
+            "batch_size": args.batch_size,
+            "epochs": args.epochs
         }
         # Save immediately after storing hyperparameters for a new file
         if not os.path.exists(log_file_path):
@@ -679,16 +681,20 @@ if __name__ == "__main__":
     parser.add_argument("--num-layers", type=int, default=2, help="Number of GNN layers in the model")
     
     # Add LR Scheduler Hyperparameters
-    parser.add_argument("--initial-lr", type=float, default=0.0001, help="Initial learning rate for Adam")
-    parser.add_argument("--lr-factor", type=float, default=0.95, help="LR reduction factor for ReduceLROnPlateau")
+    parser.add_argument("--initial-lr", type=float, default=0.0003, help="Initial learning rate for Adam")
+    parser.add_argument("--lr-factor", type=float, default=0.7, help="LR reduction factor for ReduceLROnPlateau")
     parser.add_argument("--lr-patience", type=int, default=7, help="LR patience for ReduceLROnPlateau")
     parser.add_argument("--lr-threshold", type=float, default=1e-5, help="LR threshold for ReduceLROnPlateau")
     parser.add_argument("--min-lr", type=float, default=1e-7, help="Minimum learning rate for ReduceLROnPlateau")
+    
+    # Add Training Loop Hyperparameters
+    parser.add_argument("--batch-size", type=int, default=32, help="Batch size during training")
+    parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs per iteration")
 
     # Specific mode parameters (can add more if needed, e.g., model paths for evaluate/play)
     parser.add_argument("--iteration", type=int, default=0, help="Iteration number (for train mode)")
     parser.add_argument("--num-games", type=int, default=31, help="Number of games (for evaluate/play modes)")
-    parser.add_argument("--eval-mcts-sims", type=int, default=50, help="Number of MCTS simulations (for evaluate/play modes)")
+    parser.add_argument("--eval-mcts-sims", type=int, default=30, help="Number of MCTS simulations (for evaluate/play modes)")
 
     args = parser.parse_args()
 

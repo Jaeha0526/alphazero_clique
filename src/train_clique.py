@@ -105,19 +105,25 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     
     # Train the network
     print("Starting training...")
-    num_iterations = max(1, (len(train_examples) // 16) * 30)
+    # Calculate number of iterations (training steps) based on dataset size, batch size, and epochs
+    # num_iterations = max(1, (len(train_examples) // 16) * 30) # Old calculation
+    batch_size = args.batch_size
+    epochs = args.epochs
+    num_training_steps = max(1, (len(train_examples) // batch_size) * epochs)
+    print(f"Calculated training steps: {num_training_steps} ({epochs} epochs, batch size {batch_size})")
     
     # First try training on CPU if we hit CUDA errors
     try:
         # Pass the whole args object to the network's training method
-        net.train_network(train_examples, 0, num_iterations, args=args)
+        # Note: CliqueGNN.train_network needs to handle batch_size internally now
+        net.train_network(train_examples, 0, num_training_steps, args=args)
     except RuntimeError as e:
         if "CUDA" in str(e):
             print("CUDA error occurred, trying to train on CPU instead...")
             cpu_device = torch.device("cpu")
             net.to(cpu_device)
             # Pass args object for CPU training too
-            net.train_network(train_examples, 0, num_iterations, device=cpu_device, args=args)
+            net.train_network(train_examples, 0, num_training_steps, device=cpu_device, args=args)
         else:
             raise e
     
@@ -257,6 +263,8 @@ if __name__ == "__main__":
     parser.add_argument("--lr-patience", type=int, default=7)
     parser.add_argument("--lr-threshold", type=float, default=1e-5)
     parser.add_argument("--min-lr", type=float, default=1e-7)
+    parser.add_argument("--batch-size", type=int, default=16, help="Batch size for training")
+    parser.add_argument("--epochs", type=int, default=30, help="Number of training epochs")
     
     args = parser.parse_args()
 

@@ -18,5 +18,153 @@
         "lr_threshold": 1e-05,
         "min_lr": 1e-07
     },
-    "log": []
+    "log": [
+        {
+            "iteration": 0,
+            "validation_policy_loss": 2.708030080795288,
+            "validation_value_loss": 2.8352022127364762e-05,
+            "evaluation_win_rate_vs_best": 1.0,
+            "evaluation_win_rate_vs_initial": 0.4838709677419355
+        },
+        {
+            "iteration": 1,
+            "validation_policy_loss": 2.716399065653483,
+            "validation_value_loss": 0.03885674476623535,
+            "evaluation_win_rate_vs_best": 0.41935483870967744,
+            "evaluation_win_rate_vs_initial": 0.6129032258064516
+        },
+        {
+            "iteration": 2,
+            "validation_policy_loss": 2.705718501408895,
+            "validation_value_loss": 1.0603625923977233e-05,
+            "evaluation_win_rate_vs_best": 0.45161290322580644,
+            "evaluation_win_rate_vs_initial": 0.45161290322580644
+        },
+        {
+            "iteration": 3,
+            "validation_policy_loss": 2.705997943878174,
+            "validation_value_loss": 1.4568346529131304e-08,
+            "evaluation_win_rate_vs_best": 0.4838709677419355,
+            "evaluation_win_rate_vs_initial": 0.5483870967741935
+        },
+        {
+            "iteration": 4,
+            "validation_policy_loss": 2.704511569096492,
+            "validation_value_loss": 1.5076295767357806e-10,
+            "evaluation_win_rate_vs_best": 0.5483870967741935,
+            "evaluation_win_rate_vs_initial": 0.41935483870967744
+        },
+        {
+            "iteration": 5,
+            "validation_policy_loss": 2.70246950785319,
+            "validation_value_loss": 0.3435978889465332,
+            "evaluation_win_rate_vs_best": 0.5483870967741935,
+            "evaluation_win_rate_vs_initial": 0.6129032258064516
+        },
+        {
+            "iteration": 6,
+            "validation_policy_loss": 2.700972697314094,
+            "validation_value_loss": 2.7584168492467143e-05,
+            "evaluation_win_rate_vs_best": 0.41935483870967744,
+            "evaluation_win_rate_vs_initial": 0.4838709677419355
+        },
+        {
+            "iteration": 7,
+            "validation_policy_loss": 2.7116418202718098,
+            "validation_value_loss": 0.07914187014102936,
+            "evaluation_win_rate_vs_best": 0.6129032258064516,
+            "evaluation_win_rate_vs_initial": 0.5806451612903226
+        },
+        {
+            "iteration": 8,
+            "validation_policy_loss": 2.707344204187393,
+            "validation_value_loss": 0.017451539635658264,
+            "evaluation_win_rate_vs_best": 0.5161290322580645,
+            "evaluation_win_rate_vs_initial": 0.5161290322580645
+        },
+        {
+            "iteration": 9,
+            "validation_policy_loss": 2.738050878047943,
+            "validation_value_loss": 0.01664724573493004,
+            "evaluation_win_rate_vs_best": 0.5483870967741935,
+            "evaluation_win_rate_vs_initial": 0.5806451612903226
+        },
+        {
+            "iteration": 10,
+            "validation_policy_loss": 2.7183182606330285,
+            "validation_value_loss": 0.12146389484405518,
+            "evaluation_win_rate_vs_best": 0.5161290322580645,
+            "evaluation_win_rate_vs_initial": 0.45161290322580644
+        },
+        {
+            "iteration": 11,
+            "validation_policy_loss": 2.7137104272842407,
+            "validation_value_loss": 0.06519637256860733,
+            "evaluation_win_rate_vs_best": 0.3870967741935484,
+            "evaluation_win_rate_vs_initial": 0.45161290322580644
+        },
+        {
+            "iteration": 12,
+            "validation_policy_loss": 2.7192475966044833,
+            "validation_value_loss": 2.535386798637254,
+            "evaluation_win_rate_vs_best": 0.41935483870967744,
+            "evaluation_win_rate_vs_initial": 0.41935483870967744
+        },
+        {
+            "iteration": 13,
+            "validation_policy_loss": 2.724050935109456,
+            "validation_value_loss": 0.021402770653367043,
+            "evaluation_win_rate_vs_best": 0.5161290322580645,
+            "evaluation_win_rate_vs_initial": 0.5806451612903226
+        },
+        {
+            "iteration": 14,
+            "validation_policy_loss": 2.718191998345511,
+            "validation_value_loss": 0.09873241931200027,
+            "evaluation_win_rate_vs_best": 0.5806451612903226,
+            "evaluation_win_rate_vs_initial": 0.5161290322580645
+        },
+        {
+            "iteration": 15,
+            "validation_policy_loss": 2.713528275489807,
+            "validation_value_loss": 0.013410155661404133,
+            "evaluation_win_rate_vs_best": 0.5161290322580645,
+            "evaluation_win_rate_vs_initial": 0.5483870967741935
+        },
+        {
+            "iteration": 16,
+            "validation_policy_loss": 2.6920624574025473,
+            "validation_value_loss": 5.071157374914037e-06,
+            "evaluation_win_rate_vs_best": 0.3548387096774194,
+            "evaluation_win_rate_vs_initial": 0.5161290322580645
+        },
+        {
+            "iteration": 17,
+            "validation_policy_loss": 2.7086013555526733,
+            "validation_value_loss": 0.4224558174610138,
+            "evaluation_win_rate_vs_best": 0.5483870967741935,
+            "evaluation_win_rate_vs_initial": 0.7419354838709677
+        },
+        {
+            "iteration": 18,
+            "validation_policy_loss": 2.731132209300995,
+            "validation_value_loss": 1.3573936485045124e-05,
+            "evaluation_win_rate_vs_best": 0.41935483870967744,
+            "evaluation_win_rate_vs_initial": 0.45161290322580644
+        },
+        {
+            "iteration": 19,
+            "validation_policy_loss": 2.713628189904349,
+            "validation_value_loss": 0.02858462557196617,
+            "evaluation_win_rate_vs_best": 0.5806451612903226,
+            "evaluation_win_rate_vs_initial": 0.5161290322580645
+        },
+        {
+            "iteration": 20,
+            "validation_policy_loss": 2.721799691518148,
+            "validation_value_loss": 0.10693018138408661,
+            "evaluation_win_rate_vs_best": 0.5483870967741935,
+            "evaluation_win_rate_vs_initial": 0.5483870967741935
+        }
+    ]
 }

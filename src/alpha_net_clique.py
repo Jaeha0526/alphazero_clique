@@ -261,9 +261,9 @@ class CliqueGNN(nn.Module):
         
         # Policy head
         self.policy_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim, 4*hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, 1) # Outputs score for each edge
+            nn.Linear(4*hidden_dim, 1) # Outputs score for each edge
         )
         
         # Value head
@@ -448,105 +448,86 @@ class CliqueGNN(nn.Module):
         
         # Create dataset and dataloader
         train_dataset = CliqueGameData(train_examples)
+        # Use batch_size from args
+        batch_size = getattr(args, 'batch_size', 16) # Default if args is None
+        print(f"Using batch size: {batch_size}")
+        train_loader = PyGDataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
+                                   num_workers=0, pin_memory=True) # Use 0 workers if issues arise
+
+        # Training loop (now uses num_training_steps)
+        print(f"Starting training loop for {num_iterations} steps...")
+        step = 0
+        done = False
+        epoch = 0 # Track epochs for scheduler
         
-        # Use a fixed batch size that divides evenly into the dataset size
-        dataset_size = len(train_dataset)
-        batch_size = min(16, dataset_size)
-        print(f"Using batch size: {batch_size} (dataset size: {dataset_size})")
-        
-        train_loader = PyGDataLoader(
-            train_dataset, 
-            batch_size=batch_size, 
-            shuffle=True,
-            drop_last=True  # Drop incomplete batches
-        )
-        print("Training loader created")
-        
-        print(f"Train started. Iterations: {num_iterations}")
-        for i in range(start_iter, num_iterations):
-            total_loss = 0
-            total_policy_loss = 0
-            total_value_loss = 0
+        while not done:
+            epoch_loss = 0.0
             num_batches = 0
-            
-            for batch_idx, batch in enumerate(train_loader):
-                try:
-                    # Move batch to device
-                    batch = batch.to(device)
-                    
-                    # Get batch assignment from PyG
-                    batch_assignment = batch.batch
-                    
-                    # Forward pass with batch assignment
-                    policy_output, value_output = self(batch.edge_index, batch.edge_attr, batch_assignment)
-                    
-                    # Reshape policy target to match output shape
-                    num_graphs = len(torch.unique(batch_assignment))
-                    policy_target = batch.policy.view(num_graphs, -1)  # [num_graphs, num_edges]
-                    
-                    # Calculate losses
-                    # Policy loss: cross-entropy loss averaged over the batch and normalized by number of edges
-                    policy_loss = -torch.mean(torch.sum(policy_target * torch.log(policy_output + 1e-8), dim=1))
-                    
-                    # Value loss: MSE loss averaged over the batch
-                    value_loss = F.mse_loss(value_output.squeeze(), batch.value)
-                    
-                    # Balance policy and value losses
-                    policy_weight = 1.0
-                    value_weight = 1.0
-                    
-                    # Total loss
-                    loss = policy_weight * policy_loss + value_weight * value_loss
-                    
-                    # Check for NaN values
-                    if torch.isnan(loss).any():
-                        print(f"Warning: NaN loss detected in batch {batch_idx}")
-                        continue
-                    
-                    # Backward pass
-                    optimizer.zero_grad()
-                    loss.backward()
-                    
-                    # Gradient clipping
-                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-                    
-                    optimizer.step()
-                    
-                    total_loss += loss.item()
-                    total_policy_loss += policy_loss.item()
-                    total_value_loss += value_loss.item()
-                    num_batches += 1
-                        
-                except RuntimeError as e:
-                    print(f"Error in batch {batch_idx}: {e}")
-                    if "CUDA" in str(e):
-                        torch.cuda.empty_cache()
-                    continue
-                except Exception as e:
-                    print(f"Unexpected error in batch {batch_idx}: {e}")
-                    continue
-            
-            if num_batches == 0:
-                print("No batches processed in this iteration, skipping...")
-                continue
+            for batch_data in train_loader:
+                if step >= num_iterations:
+                    done = True
+                    break
                 
-            # Calculate average losses
-            avg_loss = total_loss / num_batches
-            avg_policy_loss = total_policy_loss / num_batches
-            avg_value_loss = total_value_loss / num_batches
-            
-            # Update learning rate
-            scheduler.step(avg_loss)
-            current_lr = optimizer.param_groups[0]['lr']
-            
-            # Print progress
-            if (i + 1) % 50 == 0 or i == 0:
-                print(f"\nIteration {i+1}/{num_iterations}")
-                print(f"Average Loss: {avg_loss:.4f}")
-                print(f"Policy Loss: {avg_policy_loss:.4f}")
-                print(f"Value Loss: {avg_value_loss:.4f}")
-                print(f"Learning Rate: {current_lr:.6f}")
-                print("-" * 50)
+                self.train() # Ensure model is in training mode
+                batch_data = batch_data.to(device)
+                optimizer.zero_grad()
+                
+                # Forward pass
+                try:
+                    policy_output, value_output = self(batch_data.edge_index, batch_data.edge_attr, batch=batch_data.batch)
+                except Exception as e:
+                    print(f"Error during forward pass at step {step}: {e}")
+                    # Handle potential batch-related errors (e.g., size mismatch)
+                    # Option 1: Skip batch (might lose data)
+                    # continue 
+                    # Option 2: Try to recover (difficult)
+                    # Option 3: Raise error (stops training)
+                    raise e
+                
+                # Add small epsilon to policy output for stability
+                policy_output = policy_output + 1e-8
+                
+                # Calculate losses
+                # Reshape policy target to match output shape [batch_size, num_edges]
+                policy_target = batch_data.policy
+                num_graphs = batch_data.num_graphs # Get number of graphs in batch
+                num_edges = policy_output.shape[1] # Get num_edges from output tensor
+                if policy_target.numel() == num_graphs * num_edges:
+                     policy_target = policy_target.view(num_graphs, num_edges)
+                else:
+                    # Add error handling or logging if reshape is not possible
+                    print(f"ERROR: Cannot reshape policy_target (size {policy_target.numel()}) to ({num_graphs}, {num_edges})")
+                    continue # Skip this batch
+                
+                # Policy loss (Cross-Entropy)
+                policy_loss = -torch.sum(policy_target * torch.log(policy_output), dim=1).mean()
+                
+                # Value loss (MSE)
+                value_target = batch_data.value
+                value_loss = F.mse_loss(value_output.squeeze(), value_target)
+                
+                total_loss = policy_loss + value_loss
+                epoch_loss += total_loss.item()
+                num_batches += 1
+                
+                # Backward pass and optimize
+                total_loss.backward()
+                optimizer.step()
+                
+                # Print progress
+                if step % 50 == 0:
+                    print(f"Step: {step}/{num_iterations}, Policy Loss: {policy_loss.item():.4f}, Value Loss: {value_loss.item():.4f}")
+                step += 1
+
+            # End of epoch logic
+            if not done:
+                avg_epoch_loss = epoch_loss / num_batches if num_batches > 0 else 0
+                print(f"End of Epoch {epoch}. Avg Loss: {avg_epoch_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.7f}")
+                # Step the scheduler based on epoch loss (or validation loss if validation is done per epoch)
+                scheduler.step(avg_epoch_loss)
+                epoch += 1
+                
+        print(f"Training finished after {step} steps.")
 
 class CliqueAlphaLoss(nn.Module):
     def __init__(self):
