@@ -1,6 +1,7 @@
 # AlphaZero Clique Game
 
 This project implements the AlphaZero algorithm for the Clique Game, using Graph Neural Networks and Monte Carlo Tree Search.
+Main structure of the code originated from https://github.com/geochri/AlphaZero_Chess
 
 ## Installation
 
