@@ -172,3 +172,37 @@ alphazero_clique/
 ## License
 
 [Add your license information here]
+
+## Command-Line Arguments
+
+The `pipeline_clique.py` script accepts various command-line arguments to configure the training process:
+
+| Argument                      | Type    | Default     | Description                                                                      |
+|-------------------------------|---------|-------------|----------------------------------------------------------------------------------|
+| `--mode`                      | str     | `pipeline`  | Execution mode (`pipeline`, `selfplay`, `train`, `evaluate`, `play`).            |
+| `--vertices`                  | int     | 6           | Number of vertices in the graph.                                                 |
+| `--k`                         | int     | 3           | Size of the clique (`k`) required to win.                                        |
+| `--game-mode`                 | str     | `symmetric` | Game rules (`symmetric` or `asymmetric`).                                        |
+| `--iterations`                | int     | 5           | Total number of training iterations to run in pipeline mode.                     |
+| `--self-play-games`           | int     | 100         | Number of self-play games generated per iteration.                               |
+| `--mcts-sims`                 | int     | 200         | Number of MCTS simulations per move during self-play.                            |
+| `--eval-threshold`            | float   | 0.55        | Win rate threshold against the previous best model to accept the new model.        |
+| `--num-cpus`                  | int     | 4           | Number of CPU processes for parallel self-play game generation.                  |
+| `--experiment-name`           | str     | `default`   | Directory name under `./experiments/` to store models, data, and logs.           |
+| `--hidden-dim`                | int     | 64          | Hidden dimension size within the GNN layers.                                     |
+| `--num-layers`                | int     | 2           | Number of GNN layers (each consisting of a node and edge update block).        |
+| `--initial-lr`                | float   | 1e-5        | Initial learning rate for the Adam optimizer.                                    |
+| `--lr-factor`                 | float   | 0.7         | Factor by which the learning rate is reduced by the ReduceLROnPlateau scheduler. | 
+| `--lr-patience`               | int     | 5           | Number of epochs with no improvement after which learning rate will be reduced.  |
+| `--lr-threshold`              | float   | 1e-3        | Threshold for measuring the new optimum, to only focus on significant changes.   |
+| `--min-lr`                    | float   | 1e-7        | Lower bound on the learning rate for ReduceLROnPlateau.                          |
+| `--batch-size`                | int     | 32          | Batch size used during the training phase.                                       |
+| `--epochs`                    | int     | 30          | Number of training epochs performed on the collected data each iteration.      |
+| `--use-legacy-policy-loss`    | flag    | `False`     | If set, use the older (potentially unstable) policy loss calculation method.     |
+| `--min-alpha`                 | float   | 0.5         | Minimum clipping value for the dynamically calculated value loss weight (`alpha`). | 
+| `--max-alpha`                 | float   | 100.0       | Maximum clipping value for the dynamically calculated value loss weight (`alpha`). | 
+| `--iteration`                 | int     | 0           | Iteration number (used specifically for `train` mode).                           |
+| `--num-games`                 | int     | 21          | Number of games to play (used for `evaluate` and `play` modes).                  |
+| `--eval-mcts-sims`            | int     | 30          | Number of MCTS simulations per move during evaluation/play modes.                |
+
+**Note:** The `min-alpha` and `max-alpha` arguments define the clipping range for the value loss weight, which is dynamically calculated as `alpha = policy_loss.detach() / (value_loss.detach() + 1e-6)` during training in `alpha_net_clique.py`.
