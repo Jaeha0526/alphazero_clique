@@ -12,9 +12,12 @@ import datetime
 import numpy as np
 from typing import Tuple, List, Dict, Optional
 import torch_geometric.nn as pyg_nn
+from torch_geometric.nn import MessagePassing # Import MessagePassing
 from torch_geometric.data import Data, Batch, DataLoader as PyGDataLoader
 from torch_geometric.utils import to_dense_adj, dense_to_sparse
 import argparse
+
+DEBUG = False
 
 class CliqueGameData(Dataset):
     def __init__(self, examples):
@@ -40,6 +43,7 @@ class CliqueGameData(Dataset):
                 continue
         
         print(f"Kept {len(self.examples)}/{len(examples)} examples after validation")
+        # print(f"[DEBUG] Examples: {self.examples}")
         
     def __len__(self):
         return len(self.examples)
@@ -193,17 +197,61 @@ class CliqueGameData(Dataset):
             edge_attr = torch.tensor([[1, 0, 0], [1, 0, 0]], dtype=torch.float)
             return edge_index, edge_attr
 
-class GNNBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.conv = pyg_nn.GCNConv(in_channels, out_channels)
-        self.batch_norm = nn.BatchNorm1d(out_channels)
-        
-    def forward(self, x, edge_index):
-        x = self.conv(x, edge_index)
-        x = self.batch_norm(x)
-        x = F.relu(x)
-        return x
+# New GNN Block incorporating edge features using MessagePassing
+class EdgeAwareGNNBlock(MessagePassing):
+    def __init__(self, node_dim, edge_dim, out_dim):
+        super().__init__(aggr='add') # Use 'add' aggregation
+        # Linear layer to process concatenated node and edge features for message creation
+        self.lin_message = nn.Linear(node_dim + edge_dim, out_dim)
+        # Layer normalization applied AFTER residual addition
+        self.layer_norm = nn.LayerNorm(out_dim)
+        # Optional: Add a final linear transformation within the update step if needed
+        # self.lin_update = nn.Linear(out_dim, out_dim)
+
+        # Linear layer for the residual connection if dimensions differ
+        if node_dim != out_dim:
+            self.lin_skip = nn.Linear(node_dim, out_dim, bias=False) # Bias often False in skip connections
+        else:
+            self.lin_skip = nn.Identity()
+
+    def forward(self, x, edge_index, edge_attr):
+        # x: [N, node_dim], Node features
+        # edge_index: [2, E], Graph connectivity
+        # edge_attr: [E, edge_dim], Edge features
+
+        # Start the message passing process.
+        # The `message` method now includes ReLU.
+        aggregated_messages = self.propagate(edge_index, x=x, edge_attr=edge_attr)
+
+        # Add residual connection (transform original x if needed)
+        residual = self.lin_skip(x)
+        updated_nodes = aggregated_messages + residual
+
+        # Apply layer normalization AFTER the residual connection
+        updated_nodes = self.layer_norm(updated_nodes)
+
+        # No final activation here, non-linearity is within message/update
+        return updated_nodes
+
+    def message(self, x_j, edge_attr):
+        # x_j: [E, node_dim] - features of source nodes j for each edge (j, i)
+        # edge_attr: [E, edge_dim] - features of the edge (j, i)
+
+        # Concatenate source node features and edge features.
+        msg = torch.cat([x_j, edge_attr], dim=1)
+        # Transform the concatenated features to create the message.
+        msg = self.lin_message(msg)
+        # Apply non-linearity (ReLU) within the message function
+        return F.relu(msg)
+
+    # Optional: If more complex update logic is needed beyond aggregation
+    # def update(self, aggr_out, x):
+    #     # aggr_out contains the sum of F.relu(self.lin_message(msg))
+    #     # Add residual connection
+    #     residual = self.lin_skip(x)
+    #     updated_nodes = aggr_out + residual
+    #     # Apply layer normalization
+    #     return self.layer_norm(updated_nodes)
 
 class EdgeBlock(nn.Module):
     def __init__(self, node_dim, edge_dim, out_dim):
@@ -211,37 +259,102 @@ class EdgeBlock(nn.Module):
         self.node_dim = node_dim
         self.edge_dim = edge_dim
         self.out_dim = out_dim
-        
+
         # Linear layers to process node and edge features
         self.edge_proj = nn.Linear(edge_dim, out_dim)
         self.node_proj = nn.Linear(2 * node_dim, out_dim)
+        # Combine layer - potentially add activation after this
         self.combine = nn.Linear(2 * out_dim, out_dim)
-        self.batch_norm = nn.BatchNorm1d(out_dim)
-    
+        # Layer normalization applied AFTER residual addition
+        self.layer_norm = nn.LayerNorm(out_dim)
+
+        # Linear layer for the residual connection if dimensions differ
+        if edge_dim != out_dim:
+            self.lin_skip = nn.Linear(edge_dim, out_dim, bias=False)
+        else:
+            self.lin_skip = nn.Identity()
+
     def forward(self, x, edge_index, edge_attr):
         # Get source and target node features
         src, dst = edge_index[0], edge_index[1]
-        
+
         # Gather node features for each edge
         src_features = x[src]  # [num_edges, node_dim]
         dst_features = x[dst]  # [num_edges, node_dim]
-        
+
         # Concatenate source and destination features
         node_features = torch.cat([src_features, dst_features], dim=1)  # [num_edges, 2*node_dim]
-        
+
         # Project node and edge features
-        node_features = self.node_proj(node_features)  # [num_edges, out_dim]
-        edge_features = self.edge_proj(edge_attr)  # [num_edges, out_dim]
-        
+        # Apply activation after projection?
+        projected_node_features = F.relu(self.node_proj(node_features))  # [num_edges, out_dim]
+        projected_edge_features = F.relu(self.edge_proj(edge_attr))  # [num_edges, out_dim]
+
         # Combine node and edge information
-        combined = torch.cat([node_features, edge_features], dim=1)  # [num_edges, 2*out_dim]
-        out = self.combine(combined)  # [num_edges, out_dim]
-        
-        # Apply normalization and activation
-        out = self.batch_norm(out)
-        out = F.relu(out)
-        
+        combined = torch.cat([projected_node_features, projected_edge_features], dim=1)  # [num_edges, 2*out_dim]
+        combined_out = self.combine(combined)  # [num_edges, out_dim]
+        # Apply activation after combine?
+        combined_activated = F.relu(combined_out)
+
+        # Add residual connection (transform original edge_attr if needed)
+        residual = self.lin_skip(edge_attr)
+        out = combined_activated + residual
+
+        # Apply layer normalization AFTER residual connection
+        out = self.layer_norm(out)
+
+        # No final activation here
         return out
+
+class EnhancedPolicyHead(nn.Module):
+    def __init__(self, hidden_dim, dropout_rate=0.1):
+        super().__init__()
+        
+        # First use multi-head attention to focus on relevant edges
+        self.edge_attention = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=4,
+            dropout=dropout_rate
+        )
+        
+        # Main policy network with residual connections
+        self.policy_network = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim*2),
+            nn.GELU(),  # GELU often works better than ReLU for policy networks
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_dim*2, hidden_dim*2),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_dim*2, hidden_dim)
+        )
+        
+        # Residual connection
+        self.residual = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        
+        # Final prediction layer
+        self.output = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, 1)
+        )
+    
+    def forward(self, x):
+        # Apply self-attention to focus on important edges
+        attn_output, _ = self.edge_attention(x, x, x)
+        
+        # Apply main policy network
+        policy_features = self.policy_network(attn_output)
+        
+        # Add residual connection
+        residual_features = self.residual(x)
+        combined = policy_features + residual_features
+        
+        # Final output
+        return self.output(combined)
+
 
 class CliqueGNN(nn.Module):
     def __init__(self, num_vertices=6, hidden_dim=64, num_layers=2):
@@ -256,15 +369,19 @@ class CliqueGNN(nn.Module):
         self.node_layers = nn.ModuleList()
         self.edge_layers = nn.ModuleList()
         for _ in range(num_layers):
-            self.node_layers.append(GNNBlock(hidden_dim, hidden_dim))
+            # Replace GNNBlock with EdgeAwareGNNBlock
+            self.node_layers.append(EdgeAwareGNNBlock(hidden_dim, hidden_dim, hidden_dim))
             self.edge_layers.append(EdgeBlock(hidden_dim, hidden_dim, hidden_dim))
         
         # Policy head
-        self.policy_head = nn.Sequential(
-            nn.Linear(hidden_dim, 4*hidden_dim),
-            nn.ReLU(),
-            nn.Linear(4*hidden_dim, 1) # Outputs score for each edge
-        )
+        # self.policy_head = nn.Sequential(
+        #     nn.Linear(hidden_dim, 4*hidden_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(4*hidden_dim, hidden_dim), # Outputs score for each edge
+        #     nn.ReLU(),
+        #     nn.Linear(hidden_dim, 1)
+        # )
+        self.policy_head = EnhancedPolicyHead(hidden_dim)
         
         # Value head
         # Input to value head is mean of node features from the last layer
@@ -275,7 +392,7 @@ class CliqueGNN(nn.Module):
             nn.Tanh() # Output between -1 and 1
         )
     
-    def forward(self, edge_index, edge_attr, batch=None):
+    def forward(self, edge_index, edge_attr, batch=None, debug=False):
         # If no batch assignment is provided, assume single graph
         if batch is None:
             batch = torch.zeros(edge_index.max().item() + 1, dtype=torch.long, device=edge_index.device)
@@ -287,15 +404,29 @@ class CliqueGNN(nn.Module):
         # Initialize node features
         node_indices = torch.arange(len(batch), device=edge_index.device).float().unsqueeze(1)
         x = self.node_embedding(node_indices)
+        if debug:
+            print(f"[DEBUG] Node features: {x}")
+            print(f"[DEBUG] Edge index: {edge_index}")
+            print(f"[DEBUG] Edge index shape: {edge_index.shape}")
+            print(f"[DEBUG] Edge attributes: {edge_attr}")
+            print(f"[DEBUG] Edge attributes shape: {edge_attr.shape}")
+            print(f"[DEBUG] Batch: {batch}")
         
         # Initialize edge features
         edge_features = self.edge_embedding(edge_attr)
+        if debug:
+            print(f"[DEBUG] Edge features: {edge_features}")
+            print(f"[DEBUG] Edge features shape: {edge_features.shape}")
         
         # Apply GNN layers
-        for node_layer, edge_layer in zip(self.node_layers, self.edge_layers):
-            x_new = node_layer(x, edge_index)
+        for i, (node_layer, edge_layer) in enumerate(zip(self.node_layers, self.edge_layers)):
+            # Pass edge_features to the node_layer (EdgeAwareGNNBlock)
+            x_new = node_layer(x, edge_index, edge_features) 
             edge_features = edge_layer(x, edge_index, edge_features)
             x = x_new
+            if debug:
+                print(f"[DEBUG] Edge features after layer {i}: {edge_features}")
+                print(f"[DEBUG] Node features after layer {i}: {x}")
         
         # --- Debug Start --- 
         # Print sample edge features before policy head
@@ -307,6 +438,9 @@ class CliqueGNN(nn.Module):
         
         # Generate edge scores
         edge_scores = self.policy_head(edge_features)
+        if debug:
+            print(f"[DEBUG] Edge scores: {edge_scores}")
+            print(f"[DEBUG] Edge scores shape: {edge_scores.shape}")
         
         # --- Debug Start --- 
         # Print sample edge scores after policy head
@@ -411,7 +545,7 @@ class CliqueGNN(nn.Module):
 
     def train_network(self, train_examples: List, start_iter: int, num_iterations: int, 
               save_interval: int = 10, device: torch.device = None,
-              args: argparse.Namespace = None # Pass args object
+              args: argparse.Namespace = None, # Pass args object
              ) -> None:
         """
         Train the network on the given examples.
@@ -433,7 +567,7 @@ class CliqueGNN(nn.Module):
         min_lr = getattr(args, 'min_lr', 1e-7)
 
         print(f"Initializing Adam with LR: {initial_lr}") # Log the LR used
-        optimizer = optim.Adam(self.parameters(), lr=initial_lr)
+        optimizer = optim.Adam(self.parameters(), lr=initial_lr, weight_decay=1e-4)
         print(f"Initializing ReduceLROnPlateau with factor={lr_factor}, patience={lr_patience}, threshold={lr_threshold}, min_lr={min_lr}") # Log scheduler params
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, 
@@ -454,6 +588,12 @@ class CliqueGNN(nn.Module):
         train_loader = PyGDataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
                                    num_workers=0, pin_memory=True) # Use 0 workers if issues arise
 
+        # --- LR Warmup Setup ---
+        warmup_fraction = 0.15
+        warmup_steps = int(warmup_fraction * num_iterations)
+        print(f"LR Warmup enabled for the first {warmup_steps} steps.")
+        # --- End Warmup Setup ---
+        
         # Training loop (now uses num_training_steps)
         print(f"Starting training loop for {num_iterations} steps...")
         step = 0
@@ -472,9 +612,23 @@ class CliqueGNN(nn.Module):
                 batch_data = batch_data.to(device)
                 optimizer.zero_grad()
                 
+                # --- LR Warmup Logic ---
+                if step < warmup_steps and warmup_steps > 0:
+                    # Calculate linearly increasing LR
+                    current_lr = initial_lr * (step + 1) / warmup_steps
+                    # Apply LR to optimizer
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = current_lr
+                # After warmup, rely on ReduceLROnPlateau scheduler (implicitly via optimizer.step)
+                # --- End LR Warmup Logic ---
+                
                 # Forward pass
                 try:
-                    policy_output, value_output = self(batch_data.edge_index, batch_data.edge_attr, batch=batch_data.batch)
+                    if DEBUG:
+                        print(f"[DEBUG] Batch data: {batch_data}")
+                        print(f"[DEBUG] Batch data edge attr: {batch_data.edge_attr[-25:]}")
+                        print(f"[DEBUG] Batch data edge index: {batch_data.edge_index[-25:]}")
+                    policy_output, value_output = self(batch_data.edge_index, batch_data.edge_attr, batch=batch_data.batch, debug=DEBUG)
                 except Exception as e:
                     print(f"Error during forward pass at step {step}: {e}")
                     # Handle potential batch-related errors (e.g., size mismatch)
@@ -485,13 +639,20 @@ class CliqueGNN(nn.Module):
                     raise e
                 
                 # Add small epsilon to policy output for stability
-                policy_output = policy_output + 1e-8
+                # policy_output = policy_output + 1e-8
+                # NOTE: policy_output from the model ALREADY has softmax applied
+                policy_output_stable = policy_output + 1e-8 # Use stable version for log
                 
                 # Calculate losses
                 # Reshape policy target to match output shape [batch_size, num_edges]
                 policy_target = batch_data.policy
+                if DEBUG:
+                    print(f"[DEBUG] Policy target: {policy_target}")
                 num_graphs = batch_data.num_graphs # Get number of graphs in batch
                 num_edges = policy_output.shape[1] # Get num_edges from output tensor
+                if DEBUG:
+                    print(f"[DEBUG] policy_output: {policy_output}")
+                    print(f"[DEBUG] policy_output shape: {policy_output.shape}")
                 if policy_target.numel() == num_graphs * num_edges:
                      policy_target = policy_target.view(num_graphs, num_edges)
                 else:
@@ -499,14 +660,57 @@ class CliqueGNN(nn.Module):
                     print(f"ERROR: Cannot reshape policy_target (size {policy_target.numel()}) to ({num_graphs}, {num_edges})")
                     continue # Skip this batch
                 
-                # Policy loss (Cross-Entropy)
-                policy_loss = -torch.sum(policy_target * torch.log(policy_output), dim=1).mean()
+                use_legacy_policy_loss = getattr(args, 'use_legacy_policy_loss', False)
+                if use_legacy_policy_loss:
+                    # --- LEGACY Masking and Renormalization Logic --- (Potentially problematic)
+                    # 1. Identify invalid moves (where target probability is effectively zero)
+                    invalid_moves_mask = (policy_target < 1e-7)
+                    
+                    # 2. Mask the network's output probabilities
+                    masked_policy_output = policy_output_stable.clone()
+                    masked_policy_output[invalid_moves_mask] = 0  # Set probability for invalid moves to zero
+                    
+                    # 3. Renormalize the masked output over the valid moves for each graph
+                    sum_valid_probs = masked_policy_output.sum(dim=1, keepdim=True)
+                    # Avoid division by zero if all valid moves had near-zero probability
+                    renormalized_policy_output = masked_policy_output / (sum_valid_probs + 1e-8)
+                    # Add epsilon again for log stability after potential division by small number
+                    renormalized_policy_output = renormalized_policy_output + 1e-8 
+                    # --- End Legacy --- 
+                    
+                    # Policy loss (Cross-Entropy)
+                    # Use ORIGINAL target and RENORMALIZED output (Legacy method)
+                    if DEBUG:
+                        print(f"[DEBUG] LEGACY: Policy target: {policy_target}")
+                        print(f"[DEBUG] LEGACY: Policy target shape: {policy_target.shape}")
+                        print(f"[DEBUG] LEGACY: Renormalized policy output: {renormalized_policy_output}")
+                        print(f"[DEBUG] LEGACY: Renormalized policy output shape: {renormalized_policy_output.shape}")
+                    policy_loss = -torch.sum(policy_target * torch.log(renormalized_policy_output), dim=1).mean()
+                
+                else: # Use Standard Loss Calculation
+                    # Policy loss (Cross-Entropy) - Standard Method
+                    # Use PADDED target and ORIGINAL (stable) output
+                    log_probs = torch.log(policy_output_stable) # Use original output + epsilon
+                    if DEBUG:
+                        print(f"[DEBUG] Standard: Policy target shape: {policy_target.shape}")
+                        print(f"[DEBUG] Standard: Log Probs shape: {log_probs.shape}")
+                        
+                    policy_loss_terms = -policy_target * log_probs
+                    # Sum over the edge dimension for each graph
+                    # We should only sum where policy_target > 0 (or very small epsilon)
+                    valid_target_mask = (policy_target > 1e-7) # Mask for summing loss terms
+                    policy_loss_per_graph = torch.sum(policy_loss_terms * valid_target_mask, dim=1)
+                    # Average over the batch
+                    policy_loss = policy_loss_per_graph.mean()
                 
                 # Value loss (MSE)
                 value_target = batch_data.value
                 value_loss = F.mse_loss(value_output.squeeze(), value_target)
                 
-                total_loss = policy_loss + value_loss
+                alpha = policy_loss.detach() / (value_loss.detach() + 1e-6)
+                alpha = min(max(alpha, args.min_alpha), args.max_alpha)  # Clip to reasonable range
+                total_loss = policy_loss + alpha * value_loss
+                
                 epoch_loss += total_loss.item()
                 num_batches += 1
                 

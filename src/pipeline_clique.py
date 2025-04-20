@@ -397,7 +397,10 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "lr_threshold": args.lr_threshold,
             "min_lr": args.min_lr,
             "batch_size": args.batch_size,
-            "epochs": args.epochs
+            "epochs": args.epochs,
+            "use_legacy_policy_loss": args.use_legacy_policy_loss,
+            "min_alpha": args.min_alpha,
+            "max_alpha": args.max_alpha
         }
         # Save immediately after storing hyperparameters for a new file
         if not os.path.exists(log_file_path):
@@ -681,19 +684,22 @@ if __name__ == "__main__":
     parser.add_argument("--num-layers", type=int, default=2, help="Number of GNN layers in the model")
     
     # Add LR Scheduler Hyperparameters
-    parser.add_argument("--initial-lr", type=float, default=0.0003, help="Initial learning rate for Adam")
+    parser.add_argument("--initial-lr", type=float, default=0.00001, help="Initial learning rate for Adam")
     parser.add_argument("--lr-factor", type=float, default=0.7, help="LR reduction factor for ReduceLROnPlateau")
-    parser.add_argument("--lr-patience", type=int, default=7, help="LR patience for ReduceLROnPlateau")
-    parser.add_argument("--lr-threshold", type=float, default=1e-5, help="LR threshold for ReduceLROnPlateau")
+    parser.add_argument("--lr-patience", type=int, default=5, help="LR patience for ReduceLROnPlateau")
+    parser.add_argument("--lr-threshold", type=float, default=1e-3, help="LR threshold for ReduceLROnPlateau")
     parser.add_argument("--min-lr", type=float, default=1e-7, help="Minimum learning rate for ReduceLROnPlateau")
     
     # Add Training Loop Hyperparameters
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size during training")
-    parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs per iteration")
+    parser.add_argument("--epochs", type=int, default=30, help="Number of training epochs per iteration")
+    parser.add_argument("--use-legacy-policy-loss", action='store_true', help="Use the old (potentially problematic) policy loss calculation")
+    parser.add_argument("--min-alpha", type=float, default=0.5, help="Weight factor for the value loss component")
+    parser.add_argument("--max-alpha", type=float, default=100.0, help="Weight factor for the value loss component")
 
     # Specific mode parameters (can add more if needed, e.g., model paths for evaluate/play)
     parser.add_argument("--iteration", type=int, default=0, help="Iteration number (for train mode)")
-    parser.add_argument("--num-games", type=int, default=31, help="Number of games (for evaluate/play modes)")
+    parser.add_argument("--num-games", type=int, default=21, help="Number of games (for evaluate/play modes)")
     parser.add_argument("--eval-mcts-sims", type=int, default=30, help="Number of MCTS simulations (for evaluate/play modes)")
 
     args = parser.parse_args()
