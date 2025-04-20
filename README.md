@@ -101,36 +101,17 @@ python src/pipeline_clique.py --mode pipeline \
                              --num-cpus 4 \
                              --hidden-dim 128 \
                              --num-layers 3 \
-                             --game-mode symmetric \
+                             --initial-lr 0.0003 \
+                             --lr-factor 0.7 \
+                             --lr-patience 5 \
+                             --lr-threshold 0.003 \
+                             --use-legacy-policy-loss True \
                              --experiment-name n6k3_h128_l3
 ```
 
 **Pipeline Arguments Detailed:**
 
-*   `--mode`: Execution mode. Choices: `pipeline`, `selfplay`, `train`, `evaluate`, `play`.
-    *   `pipeline` (default): Runs the full loop (self-play, train, evaluate).
-    *   `selfplay`: Runs only the self-play data generation step using the current best model.
-    *   `train`: Runs only the training step using data from a specific iteration.
-    *   `evaluate`: Runs only the evaluation step (new model vs best).
-    *   `play`: Allows a human to play against the best model in the console.
-*   `--vertices <N>` (default: 6): Number of vertices in the graph.
-*   `--k <K>` (default: 3): Size of the clique to find.
-*   `--game-mode <mode>` (default: `symmetric`): Game rules (`symmetric` or `asymmetric`).
-*   `--iterations <I>` (default: 5): Number of pipeline iterations to run.
-*   `--self-play-games <G>` (default: 100): Number of self-play games per iteration.
-*   `--mcts-sims <S>` (default: 200): Number of MCTS simulations per move (used in self-play and evaluation).
-*   `--num-games <N>` (default: 31): Number of evaluation games to play (trained vs best, trained vs initial).
-*   `--eval-threshold <T>` (default: 0.55): Win rate threshold (vs best) to update the best model.
-*   `--num-cpus <C>` (default: 4): Number of CPU cores for parallel self-play.
-*   `--experiment-name <name>` (default: `default`): Subdirectory name under `./experiments/` for storing models, datasets, and logs.
-*   `--hidden-dim <H>` (default: 64): Size of hidden dimensions in GNN layers.
-*   `--num-layers <L>` (default: 2): Number of GNN layers in the model.
-*   `--initial-lr <LR>` (default: 0.0001): Initial learning rate for the Adam optimizer.
-*   `--lr-factor <F>` (default: 0.95): Factor by which the learning rate is reduced by the scheduler (e.g., `new_lr = lr * factor`).
-*   `--lr-patience <P>` (default: 7): Number of epochs with no improvement after which learning rate will be reduced.
-*   `--lr-threshold <TH>` (default: 1e-5): Threshold for measuring improvement for the LR scheduler.
-*   `--min-lr <MLR>` (default: 1e-7): Minimum learning rate allowed by the scheduler.
-*   `--iteration <Iter>` (default: 0): Specific iteration number (used primarily for `train`, `evaluate`, `selfplay` modes).
+Above are main arguments we want to change for the experiment. You can find details on arguments in Command-Line Arguments section. 
 
 *(Other modes like `selfplay`, `train`, `evaluate` are available via `--mode` for running specific parts of the pipeline - see `src/pipeline_clique.py` for details)*
 
