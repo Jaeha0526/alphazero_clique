@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import pickle
 import glob
 import json
+import wandb
 
 from clique_board import CliqueBoard
 from alpha_net_clique import CliqueGNN
@@ -351,6 +352,21 @@ def run_pipeline(args: argparse.Namespace) -> None:
     print(f"Model Dir: {model_dir}")
     print(f"Log File: {log_file_path}")
 
+    # Initialize wandb
+    wandb_run = None # Initialize to None
+    try:
+        wandb_run = wandb.init(
+            project="alphazero_clique", # Set your project name
+            name=args.experiment_name,  # Use experiment name for the run name
+            config=vars(args),          # Log all command line args
+            resume="allow",             # Allow resuming if the run exists
+            id=f"pipeline_{args.experiment_name}" # Unique ID based on experiment name
+        )
+        print("Weights & Biases initialized successfully.")
+    except Exception as e:
+        print(f"Could not initialize Weights & Biases: {e}. Skipping wandb logging.")
+        # wandb_run remains None
+
     # --- Load existing log data or initialize --- 
     log_data = {"hyperparameters": {}, "log": []} # Initialize with new structure
     if os.path.exists(log_file_path):
@@ -438,6 +454,15 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     plot_learning_curve(log_file_path)
             except Exception as e:
                 print(f"ERROR: Could not save log file {log_file_path}: {e}")
+
+            # Log metrics to wandb if initialized
+            if wandb_run and iteration_metrics:
+                try:
+                    # Make sure iteration is the step key
+                    wandb.log(iteration_metrics, step=iteration_metrics.get("iteration", iteration))
+                    print(f"Logged iteration {iteration} metrics to Weights & Biases.")
+                except Exception as e:
+                    print(f"Error logging metrics to Weights & Biases: {e}")
         else:
             print(f"Iteration {iteration} did not return metrics (likely skipped). Not logging.")
             
@@ -449,6 +474,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
     
     if log_data["log"]:
         plot_learning_curve(log_file_path) 
+
+    # Finish the wandb run if initialized
+    if wandb_run:
+        wandb_run.finish()
+        print("Weights & Biases run finished.")
 
 def plot_learning_curve(log_file_path: str):
     """

@@ -10,3 +10,4 @@ networkx
 torch-geometric>=2.0.4
 pandas>=1.3.5
 tqdm>=4.62.3 
+wandb>=0.15.10
