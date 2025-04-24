@@ -574,7 +574,6 @@ class CliqueGNN(nn.Module):
             mode='min', 
             factor=lr_factor,
             patience=lr_patience,
-            verbose=True,
             min_lr=min_lr,
             threshold=lr_threshold,
             threshold_mode='rel'
