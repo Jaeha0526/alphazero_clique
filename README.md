@@ -96,17 +96,19 @@ python src/pipeline_clique.py --mode pipeline \
                              --vertices 6 \
                              --k 3 \
                              --iterations 20 \
-                             --self-play-games 100 \
+                             --self-play-games 48 \
                              --mcts-sims 200 \
-                             --num-cpus 4 \
+                             --num-cpus 6 \
                              --hidden-dim 128 \
                              --num-layers 3 \
                              --initial-lr 0.0003 \
                              --lr-factor 0.7 \
                              --lr-patience 5 \
                              --lr-threshold 0.003 \
-                             --use-legacy-policy-loss True \
-                             --experiment-name n6k3_h128_l3
+                             --batch-size 128 \
+                             --epochs 10 \
+                             --use-legacy-policy-loss \
+                             --experiment-name n6k3_h128_l3 \
 ```
 
 **Pipeline Arguments Detailed:**
