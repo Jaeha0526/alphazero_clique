@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import datetime
 import time
 import random
+import copy
 from torch_geometric.data import DataLoader as PyGDataLoader
 from alpha_net_clique import CliqueGameData
 import torch.nn.functional as F
