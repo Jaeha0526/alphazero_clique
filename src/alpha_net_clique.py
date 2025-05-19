@@ -394,12 +394,32 @@ class CliqueGNN(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
         
-        # Enhanced value head with batch normalization and properly initialized weights
+        # Global attention pooling for nodes
+        self.node_attention = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 4),
+            nn.Tanh(),
+            nn.Linear(hidden_dim // 4, 1)
+        )
+        
+        # Global attention pooling for edges
+        self.edge_attention = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 4),
+            nn.Tanh(),
+            nn.Linear(hidden_dim // 4, 1)
+        )
+        
+        # Enhanced value head that combines both node and edge features
+        # Input size is 2*hidden_dim (concatenated node and edge global features)
         self.value_head = nn.Sequential(
-            nn.BatchNorm1d(hidden_dim),  # Add batch normalization for stability
+            nn.BatchNorm1d(2*hidden_dim),  # Batch norm for combined features
+            nn.Linear(2*hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            # Add residual block
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(0.2),  # Add dropout to prevent overfitting
+            nn.Dropout(0.1),
+            # Final value prediction
             nn.Linear(hidden_dim, 1),
             nn.Tanh()  # Output between -1 and 1
         )
@@ -553,18 +573,45 @@ class CliqueGNN(nn.Module):
             policy = F.softmax(policy, dim=0)
             policies.append(policy)
             
-            # Calculate value for this graph
-            graph_nodes = x[start_idx:end_idx]
-            value_input = torch.mean(graph_nodes, dim=0, keepdim=True)
+            # Extract nodes and edges for this graph
+            graph_nodes = x[start_idx:end_idx]  # [num_nodes, hidden_dim]
             
-            # For batch norm in value head, we need to handle single instances differently
+            # Extract edges for this graph 
+            graph_mask = (edge_index[0] >= start_idx) & (edge_index[0] < end_idx)
+            graph_edge_features = edge_features[graph_mask]  # [num_edges, hidden_dim]
+            
+            # Apply attention-based pooling for nodes
+            if len(graph_nodes) > 0:  # Ensure we have nodes
+                # Calculate attention scores for nodes
+                node_attn_scores = self.node_attention(graph_nodes)  # [num_nodes, 1]
+                node_attn_weights = F.softmax(node_attn_scores, dim=0)  # [num_nodes, 1]
+                # Weighted sum of node features
+                node_features_pooled = torch.sum(graph_nodes * node_attn_weights, dim=0)  # [hidden_dim]
+            else:
+                # Fallback if no nodes (shouldn't happen)
+                node_features_pooled = torch.zeros(self.hidden_dim, device=edge_index.device)
+            
+            # Apply attention-based pooling for edges
+            if len(graph_edge_features) > 0:  # Ensure we have edges
+                # Calculate attention scores for edges
+                edge_attn_scores = self.edge_attention(graph_edge_features)  # [num_edges, 1]
+                edge_attn_weights = F.softmax(edge_attn_scores, dim=0)  # [num_edges, 1]
+                # Weighted sum of edge features
+                edge_features_pooled = torch.sum(graph_edge_features * edge_attn_weights, dim=0)  # [hidden_dim]
+            else:
+                # Fallback if no edges (shouldn't happen)
+                edge_features_pooled = torch.zeros(self.hidden_dim, device=edge_index.device)
+            
+            # Concatenate node and edge pooled features
+            combined_features = torch.cat([node_features_pooled, edge_features_pooled], dim=0)  # [2*hidden_dim]
+            
+            # Store the combined features for batch processing
             if self.training:
                 # During training, we'll collect all value inputs and process them as a batch
-                values.append(value_input.squeeze(0))  # Remove the keepdim
+                values.append(combined_features)  # [2*hidden_dim]
             else:
-                # During inference, we need to handle batch norm for single instance
-                # We use instance-specific stats
-                value = self.value_head(value_input.squeeze(0).unsqueeze(0))  # Ensure shape is [1, hidden_dim]
+                # During inference, handle batch norm for single instance
+                value = self.value_head(combined_features.unsqueeze(0))  # Shape [1, 1]
                 values.append(value)
         
         # Stack policies
@@ -573,7 +620,7 @@ class CliqueGNN(nn.Module):
         # Handle values based on training/inference mode
         if self.training:
             # In training mode, we process all value inputs together through the value head
-            values_tensor = torch.stack(values)  # [num_graphs, hidden_dim]
+            values_tensor = torch.stack(values)  # [num_graphs, 2*hidden_dim]
             values = self.value_head(values_tensor)  # [num_graphs, 1]
         else:
             # In inference mode, we've already processed each value input separately
