@@ -458,6 +458,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "use_legacy_policy_loss": args.use_legacy_policy_loss,
             "min_alpha": args.min_alpha,
             "max_alpha": args.max_alpha,
+            "value_weight": args.value_weight,
             "use_policy_only": args.use_policy_only
         }
         # Save immediately after storing hyperparameters for a new file
@@ -768,6 +769,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-legacy-policy-loss", action='store_true', help="Use the old (potentially problematic) policy loss calculation")
     parser.add_argument("--min-alpha", type=float, default=0.5, help="Weight factor for the value loss component")
     parser.add_argument("--max-alpha", type=float, default=100.0, help="Weight factor for the value loss component")
+    parser.add_argument("--value-weight", type=float, default=1.0, help="Weight for value loss in the combined loss function")
 
     # Specific mode parameters (can add more if needed, e.g., model paths for evaluate/play)
     parser.add_argument("--iteration", type=int, default=0, help="Iteration number (for train mode)")
