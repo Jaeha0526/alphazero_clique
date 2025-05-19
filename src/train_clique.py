@@ -106,24 +106,75 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     # Train the network
     print("Starting training...")
     # Calculate number of iterations (training steps) based on dataset size, batch size, and epochs
-    # num_iterations = max(1, (len(train_examples) // 16) * 30) # Old calculation
     batch_size = args.batch_size
     epochs = args.epochs
     num_training_steps = max(1, (len(train_examples) // batch_size) * epochs)
     print(f"Calculated training steps: {num_training_steps} ({epochs} epochs, batch size {batch_size})")
     
-    # First try training on CPU if we hit CUDA errors
+    # Add early stopping to prevent overfitting
+    patience = 5  # Number of epochs with no improvement after which training will be stopped
+    min_delta = 0.001  # Minimum change to qualify as an improvement
+    best_loss = float('inf')
+    patience_counter = 0
+    
+    # Updated args with additional parameters
+    if not hasattr(args, 'value_weight'):
+        args.value_weight = 1.0  # Default value weight if not specified
+    
+    # First try training on GPU if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Training device: {device}")
+    
     try:
+        # Move model to selected device
+        net.to(device)
+        
         # Pass the whole args object to the network's training method
-        # Note: CliqueGNN.train_network needs to handle batch_size internally now
-        net.train_network(train_examples, 0, num_training_steps, args=args)
+        train_losses = []  # Track losses for early stopping
+        
+        # Call train_network with early stopping logic
+        best_model_state = None
+        for epoch in range(epochs):
+            try:
+                epoch_loss = net.train_network(train_examples, 0, num_training_steps // epochs, 
+                                             device=device, args=args)
+                train_losses.append(epoch_loss)
+                print(f"Epoch {epoch+1}/{epochs} - Loss: {epoch_loss:.6f}")
+                
+                # Check if this is the best model so far
+                if epoch_loss < best_loss - min_delta:
+                    best_loss = epoch_loss
+                    patience_counter = 0
+                    # Save the best model state
+                    best_model_state = copy.deepcopy(net.state_dict())
+                    print(f"New best model! Loss: {best_loss:.6f}")
+                else:
+                    patience_counter += 1
+                    print(f"No improvement for {patience_counter} epochs (best: {best_loss:.6f}, current: {epoch_loss:.6f})")
+                
+                # Early stopping check
+                if patience_counter >= patience:
+                    print(f"Early stopping after {epoch+1} epochs")
+                    # Restore best model
+                    if best_model_state is not None:
+                        net.load_state_dict(best_model_state)
+                    break
+                    
+            except Exception as e:
+                print(f"Error during epoch {epoch+1}: {e}")
+                if "CUDA" in str(e):
+                    print("CUDA error occurred, trying to continue on CPU...")
+                    device = torch.device("cpu")
+                    net.to(device)
+                else:
+                    raise e
     except RuntimeError as e:
+        print(f"Error during training: {e}")
         if "CUDA" in str(e):
             print("CUDA error occurred, trying to train on CPU instead...")
-            cpu_device = torch.device("cpu")
-            net.to(cpu_device)
-            # Pass args object for CPU training too
-            net.train_network(train_examples, 0, num_training_steps, device=cpu_device, args=args)
+            device = torch.device("cpu")
+            net.to(device)
+            net.train_network(train_examples, 0, num_training_steps, device=device, args=args)
         else:
             raise e
     

@@ -361,9 +361,13 @@ class CliqueGNN(nn.Module):
         super().__init__()
         self.hidden_dim = hidden_dim
         
-        # Input embedding layers
+        # Input embedding layers with initialization
         self.node_embedding = nn.Linear(1, hidden_dim)  # Assuming node features are just indices initially
         self.edge_embedding = nn.Linear(3, hidden_dim)  # 3 features for edge state [unselected, p1, p2]
+        
+        # Initialize embeddings with Xavier (helps with training convergence)
+        nn.init.xavier_uniform_(self.node_embedding.weight)
+        nn.init.xavier_uniform_(self.edge_embedding.weight)
         
         # Dynamically create GNN layers
         self.node_layers = nn.ModuleList()
@@ -373,24 +377,39 @@ class CliqueGNN(nn.Module):
             self.node_layers.append(EdgeAwareGNNBlock(hidden_dim, hidden_dim, hidden_dim))
             self.edge_layers.append(EdgeBlock(hidden_dim, hidden_dim, hidden_dim))
         
-        # Policy head
-        # self.policy_head = nn.Sequential(
-        #     nn.Linear(hidden_dim, 4*hidden_dim),
-        #     nn.ReLU(),
-        #     nn.Linear(4*hidden_dim, hidden_dim), # Outputs score for each edge
-        #     nn.ReLU(),
-        #     nn.Linear(hidden_dim, 1)
-        # )
-        self.policy_head = EnhancedPolicyHead(hidden_dim)
-        
-        # Value head
-        # Input to value head is mean of node features from the last layer
-        self.value_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
+        # Simpler policy head with properly initialized weights
+        self.policy_head = nn.Sequential(
+            nn.Linear(hidden_dim, 2*hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim // 2, 1),
-            nn.Tanh() # Output between -1 and 1
+            nn.Dropout(0.2),  # Add dropout to prevent overfitting
+            nn.Linear(2*hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
         )
+        
+        # Initialize policy head weights
+        for m in self.policy_head.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        
+        # Enhanced value head with batch normalization and properly initialized weights
+        self.value_head = nn.Sequential(
+            nn.BatchNorm1d(hidden_dim),  # Add batch normalization for stability
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.2),  # Add dropout to prevent overfitting
+            nn.Linear(hidden_dim, 1),
+            nn.Tanh()  # Output between -1 and 1
+        )
+        
+        # Initialize value head weights
+        for m in self.value_head.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
     
     def forward(self, edge_index, edge_attr, batch=None, debug=False):
         # If no batch assignment is provided, assume single graph
@@ -537,22 +556,41 @@ class CliqueGNN(nn.Module):
             # Calculate value for this graph
             graph_nodes = x[start_idx:end_idx]
             value_input = torch.mean(graph_nodes, dim=0, keepdim=True)
-            value = self.value_head(value_input)
-            values.append(value)
+            
+            # For batch norm in value head, we need to handle single instances differently
+            if self.training:
+                # During training, we'll collect all value inputs and process them as a batch
+                values.append(value_input.squeeze(0))  # Remove the keepdim
+            else:
+                # During inference, we need to handle batch norm for single instance
+                # We use instance-specific stats
+                value = self.value_head(value_input.squeeze(0).unsqueeze(0))  # Ensure shape is [1, hidden_dim]
+                values.append(value)
         
-        # Stack policies and values instead of concatenating
+        # Stack policies
         policies = torch.stack(policies)  # [num_graphs, num_edges]
-        values = torch.stack(values)  # [num_graphs, 1]
+        
+        # Handle values based on training/inference mode
+        if self.training:
+            # In training mode, we process all value inputs together through the value head
+            values_tensor = torch.stack(values)  # [num_graphs, hidden_dim]
+            values = self.value_head(values_tensor)  # [num_graphs, 1]
+        else:
+            # In inference mode, we've already processed each value input separately
+            values = torch.stack(values)  # [num_graphs, 1]
         
         return policies, values
 
     def train_network(self, train_examples: List, start_iter: int, num_iterations: int, 
               save_interval: int = 10, device: torch.device = None,
               args: argparse.Namespace = None, # Pass args object
-             ) -> None:
+             ) -> float:
         """
         Train the network on the given examples.
         Expects LR parameters within the args object.
+        
+        Returns:
+            avg_epoch_loss: Average loss for this epoch/training run
         """
         if device is None:
             device = torch.device("cpu")
@@ -600,140 +638,131 @@ class CliqueGNN(nn.Module):
         print(f"Starting training loop for {num_iterations} steps...")
         step = 0
         done = False
-        epoch = 0 # Track epochs for scheduler
+        epoch_loss = 0.0
+        num_batches = 0
         
-        while not done:
-            epoch_loss = 0.0
-            num_batches = 0
-            for batch_data in train_loader:
-                if step >= num_iterations:
-                    done = True
-                    break
-                
-                self.train() # Ensure model is in training mode
-                batch_data = batch_data.to(device)
-                optimizer.zero_grad()
-                
-                # --- LR Warmup Logic ---
-                if step < warmup_steps and warmup_steps > 0:
-                    # Calculate linearly increasing LR
-                    current_lr = initial_lr * (step + 1) / warmup_steps
-                    # Apply LR to optimizer
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] = current_lr
-                # After warmup, rely on ReduceLROnPlateau scheduler (implicitly via optimizer.step)
-                # --- End LR Warmup Logic ---
-                
-                # Forward pass
-                try:
-                    if DEBUG:
-                        print(f"[DEBUG] Batch data: {batch_data}")
-                        print(f"[DEBUG] Batch data edge attr: {batch_data.edge_attr[-25:]}")
-                        print(f"[DEBUG] Batch data edge index: {batch_data.edge_index[-25:]}")
-                    policy_output, value_output = self(batch_data.edge_index, batch_data.edge_attr, batch=batch_data.batch, debug=DEBUG)
-                except Exception as e:
-                    print(f"Error during forward pass at step {step}: {e}")
-                    # Handle potential batch-related errors (e.g., size mismatch)
-                    # Option 1: Skip batch (might lose data)
-                    # continue 
-                    # Option 2: Try to recover (difficult)
-                    # Option 3: Raise error (stops training)
-                    raise e
-                
-                # Add small epsilon to policy output for stability
-                # policy_output = policy_output + 1e-8
-                # NOTE: policy_output from the model ALREADY has softmax applied
-                policy_output_stable = policy_output + 1e-8 # Use stable version for log
-                
-                # Calculate losses
-                # Reshape policy target to match output shape [batch_size, num_edges]
-                policy_target = batch_data.policy
+        # Performance tracking
+        policy_loss_sum = 0.0
+        value_loss_sum = 0.0
+        
+        for batch_data in train_loader:
+            if step >= num_iterations:
+                break
+            
+            self.train() # Ensure model is in training mode
+            batch_data = batch_data.to(device)
+            optimizer.zero_grad()
+            
+            # --- LR Warmup Logic ---
+            if step < warmup_steps and warmup_steps > 0:
+                # Calculate linearly increasing LR
+                current_lr = initial_lr * (step + 1) / warmup_steps
+                # Apply LR to optimizer
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = current_lr
+            # --- End LR Warmup Logic ---
+            
+            # Forward pass
+            try:
                 if DEBUG:
-                    print(f"[DEBUG] Policy target: {policy_target}")
-                num_graphs = batch_data.num_graphs # Get number of graphs in batch
-                num_edges = policy_output.shape[1] # Get num_edges from output tensor
-                if DEBUG:
-                    print(f"[DEBUG] policy_output: {policy_output}")
-                    print(f"[DEBUG] policy_output shape: {policy_output.shape}")
-                if policy_target.numel() == num_graphs * num_edges:
-                     policy_target = policy_target.view(num_graphs, num_edges)
-                else:
-                    # Add error handling or logging if reshape is not possible
-                    print(f"ERROR: Cannot reshape policy_target (size {policy_target.numel()}) to ({num_graphs}, {num_edges})")
-                    continue # Skip this batch
-                
-                use_legacy_policy_loss = getattr(args, 'use_legacy_policy_loss', False)
-                if use_legacy_policy_loss:
-                    # --- LEGACY Masking and Renormalization Logic --- (Potentially problematic)
-                    # 1. Identify invalid moves (where target probability is effectively zero)
-                    invalid_moves_mask = (policy_target < 1e-7)
-                    
-                    # 2. Mask the network's output probabilities
-                    masked_policy_output = policy_output_stable.clone()
-                    masked_policy_output[invalid_moves_mask] = 0  # Set probability for invalid moves to zero
-                    
-                    # 3. Renormalize the masked output over the valid moves for each graph
-                    sum_valid_probs = masked_policy_output.sum(dim=1, keepdim=True)
-                    # Avoid division by zero if all valid moves had near-zero probability
-                    renormalized_policy_output = masked_policy_output / (sum_valid_probs + 1e-8)
-                    # Add epsilon again for log stability after potential division by small number
-                    renormalized_policy_output = renormalized_policy_output + 1e-8 
-                    # --- End Legacy --- 
-                    
-                    # Policy loss (Cross-Entropy)
-                    # Use ORIGINAL target and RENORMALIZED output (Legacy method)
-                    if DEBUG:
-                        print(f"[DEBUG] LEGACY: Policy target: {policy_target}")
-                        print(f"[DEBUG] LEGACY: Policy target shape: {policy_target.shape}")
-                        print(f"[DEBUG] LEGACY: Renormalized policy output: {renormalized_policy_output}")
-                        print(f"[DEBUG] LEGACY: Renormalized policy output shape: {renormalized_policy_output.shape}")
-                    policy_loss = -torch.sum(policy_target * torch.log(renormalized_policy_output), dim=1).mean()
-                
-                else: # Use Standard Loss Calculation
-                    # Policy loss (Cross-Entropy) - Standard Method
-                    # Use PADDED target and ORIGINAL (stable) output
-                    log_probs = torch.log(policy_output_stable) # Use original output + epsilon
-                    if DEBUG:
-                        print(f"[DEBUG] Standard: Policy target shape: {policy_target.shape}")
-                        print(f"[DEBUG] Standard: Log Probs shape: {log_probs.shape}")
-                        
-                    policy_loss_terms = -policy_target * log_probs
-                    # Sum over the edge dimension for each graph
-                    # We should only sum where policy_target > 0 (or very small epsilon)
-                    valid_target_mask = (policy_target > 1e-7) # Mask for summing loss terms
-                    policy_loss_per_graph = torch.sum(policy_loss_terms * valid_target_mask, dim=1)
-                    # Average over the batch
-                    policy_loss = policy_loss_per_graph.mean()
-                
-                # Value loss (MSE)
-                value_target = batch_data.value
-                value_loss = F.mse_loss(value_output.squeeze(), value_target)
-                
-                alpha = policy_loss.detach() / (value_loss.detach() + 1e-6)
-                alpha = min(max(alpha, args.min_alpha), args.max_alpha)  # Clip to reasonable range
-                total_loss = policy_loss + alpha * value_loss
-                
-                epoch_loss += total_loss.item()
-                num_batches += 1
-                
-                # Backward pass and optimize
-                total_loss.backward()
-                optimizer.step()
-                
-                # Print progress
-                if step % 50 == 0:
-                    print(f"Step: {step}/{num_iterations}, Policy Loss: {policy_loss.item():.4f}, Value Loss: {value_loss.item():.4f}")
-                step += 1
+                    print(f"[DEBUG] Batch data: {batch_data}")
+                    print(f"[DEBUG] Batch data edge attr: {batch_data.edge_attr[-25:]}")
+                    print(f"[DEBUG] Batch data edge index: {batch_data.edge_index[-25:]}")
+                policy_output, value_output = self(batch_data.edge_index, batch_data.edge_attr, batch=batch_data.batch, debug=DEBUG)
+            except Exception as e:
+                print(f"Error during forward pass at step {step}: {e}")
+                # Handle potential batch-related errors (e.g., size mismatch)
+                continue # Skip this batch
+            
+            # Add small epsilon to policy output for stability
+            policy_output_stable = policy_output + 1e-8 # Use stable version for log
+            
+            # Calculate losses
+            # Reshape policy target to match output shape [batch_size, num_edges]
+            policy_target = batch_data.policy
+            num_graphs = batch_data.num_graphs # Get number of graphs in batch
+            num_edges = policy_output.shape[1] # Get num_edges from output tensor
+            
+            if policy_target.numel() == num_graphs * num_edges:
+                 policy_target = policy_target.view(num_graphs, num_edges)
+            else:
+                # Add error handling or logging if reshape is not possible
+                print(f"ERROR: Cannot reshape policy_target (size {policy_target.numel()}) to ({num_graphs}, {num_edges})")
+                continue # Skip this batch
+            
+            # Improved policy loss calculation
+            # 1. Create a valid moves mask
+            valid_moves_mask = (policy_target > 1e-7)
+            
+            # 2. Create a KL-divergence based loss that focuses on valid moves
+            # Get raw logits from the policy network
+            log_probs = torch.log(policy_output_stable) # Use original output + epsilon
+            
+            # Calculate KL divergence loss only on valid moves
+            # We multiply by policy_target to weight more important moves higher
+            policy_loss_terms = -policy_target * log_probs * valid_moves_mask
+            
+            # Sum over the edge dimension for each graph
+            policy_loss_per_graph = torch.sum(policy_loss_terms, dim=1)
+            
+            # Average over the batch
+            policy_loss = policy_loss_per_graph.mean()
+            
+            # Value loss with label smoothing to prevent the model from being too confident
+            value_target = batch_data.value
+            # Apply label smoothing: move targets slightly toward zero
+            smoothing_factor = 0.1
+            smoothed_value_target = value_target * (1 - smoothing_factor)
+            
+            # Huber loss is more robust to outliers than MSE
+            value_loss = F.smooth_l1_loss(value_output.squeeze(), smoothed_value_target)
+            
+            # Dynamically balance policy and value losses
+            # This prevents one loss from dominating the other
+            policy_weight = 1.0
+            value_weight = getattr(args, 'value_weight', 1.0)  # Default to 1.0 if not specified
+            
+            # Add L2 regularization to prevent overfitting
+            l2_reg = 0.0
+            for param in self.parameters():
+                l2_reg += torch.norm(param)
+            l2_reg *= 1e-5  # Small regularization factor
+            
+            # Combined loss
+            total_loss = policy_weight * policy_loss + value_weight * value_loss + l2_reg
+            
+            # Track losses
+            policy_loss_sum += policy_loss.item()
+            value_loss_sum += value_loss.item()
+            epoch_loss += total_loss.item()
+            num_batches += 1
+            
+            # Backward pass and optimize
+            total_loss.backward()
+            
+            # Gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+            
+            optimizer.step()
+            
+            # Print progress
+            if step % 20 == 0:
+                print(f"Step: {step}/{num_iterations}, Policy Loss: {policy_loss.item():.6f}, Value Loss: {value_loss.item():.6f}")
+            step += 1
 
-            # End of epoch logic
-            if not done:
-                avg_epoch_loss = epoch_loss / num_batches if num_batches > 0 else 0
-                print(f"End of Epoch {epoch}. Avg Loss: {avg_epoch_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.7f}")
-                # Step the scheduler based on epoch loss (or validation loss if validation is done per epoch)
-                scheduler.step(avg_epoch_loss)
-                epoch += 1
-                
-        print(f"Training finished after {step} steps.")
+        # End of epoch logic
+        avg_epoch_loss = epoch_loss / max(1, num_batches)
+        avg_policy_loss = policy_loss_sum / max(1, num_batches)
+        avg_value_loss = value_loss_sum / max(1, num_batches)
+        
+        print(f"Training completed. Steps: {step}, Avg Loss: {avg_epoch_loss:.6f}")
+        print(f"  Policy Loss: {avg_policy_loss:.6f}, Value Loss: {avg_value_loss:.6f}")
+        print(f"  LR: {optimizer.param_groups[0]['lr']:.7f}")
+        
+        # Step the scheduler based on epoch loss
+        scheduler.step(avg_epoch_loss)
+        
+        return avg_epoch_loss
 
 class CliqueAlphaLoss(nn.Module):
     def __init__(self):

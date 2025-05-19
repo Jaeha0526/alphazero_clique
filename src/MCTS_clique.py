@@ -59,8 +59,10 @@ class UCTNode:
         """Calculate Exploration bonus U for children."""
         # Use self.number_visits (visits TO this node) for sqrt(N(s))
         # Use self.child_number_visits for N(s,a) in denominator
+        # The AlphaZero paper uses c_puct = 1.0, but we can adjust this value
+        c_puct = 2.0  # Increased exploration constant to encourage more exploration
         sqrt_N_s = math.sqrt(max(1.0, self.number_visits))
-        return sqrt_N_s * (abs(self.child_priors) / (1.0 + self.child_number_visits))
+        return c_puct * sqrt_N_s * (abs(self.child_priors) / (1.0 + self.child_number_visits))
 
     def best_child(self) -> int:
         # This should now work correctly with the internal stats
@@ -91,17 +93,41 @@ class UCTNode:
             # Extract the valid child priors
             valid_child_priors = child_priors[action_idxs]
 
-            # Generate Dirichlet noise (alpha=0.3 is common)
-            noise_alpha = 0.3
+            # The AlphaZero paper uses alpha = 0.03 for Chess and 0.3 for Go
+            # For the Clique Game, we use a smaller alpha for sharper noise distribution
+            # This encourages more focused exploration
+            noise_alpha = 0.2
+            
+            # The value of alpha depends on the number of valid actions
+            # For games with fewer legal moves, we want more focused exploration
+            if len(action_idxs) < 5:
+                noise_alpha = 0.1  # More focused for small action spaces
+            elif len(action_idxs) > 15:
+                noise_alpha = 0.3  # More uniform for large action spaces
+            
+            # Generate Dirichlet noise
             noise = np.random.dirichlet([noise_alpha] * len(action_idxs))
 
+            # Stabilize extremes in the noise distribution
+            noise = np.clip(noise, 0.01, 0.99)
+            
             # Mix the priors with noise using the provided weight
             valid_child_priors = (1 - noise_weight) * valid_child_priors + noise_weight * noise
 
             # Put the modified priors back
             child_priors[action_idxs] = valid_child_priors
+            
+            # Ensure the priors sum to 1.0 after noise addition
+            if valid_child_priors.sum() > 0:
+                child_priors[action_idxs] = valid_child_priors / valid_child_priors.sum()
+                
+            # Print noise information periodically
+            if np.random.random() < 0.01:  # 1% chance to print
+                print(f"Dirichlet noise added: alpha={noise_alpha}, "
+                      f"num_actions={len(action_idxs)}, weight={noise_weight}")
+                
         except Exception as e:
-            print(f"Warning: Error adding Dirichlet noise: {e}") # Add warning
+            print(f"Warning: Error adding Dirichlet noise: {e}")
             # Return original priors if error occurs
             pass
 
@@ -159,6 +185,12 @@ class UCTNode:
         node = self
         # value_estimate is always from P1's perspective
         
+        # For terminal nodes, we apply a higher weight to reinforce learning of winning/losing positions
+        # This can help the network more quickly learn the value of terminal states
+        terminal_state_weight = 1.0
+        if self.game.game_state != 0:  # Terminal state (game over)
+            terminal_state_weight = 2.0  # Increase the weight for terminal states
+        
         while node is not None: 
             # Increment visits TO this node
             node.number_visits += 1
@@ -169,7 +201,8 @@ class UCTNode:
                 move_idx = node.move # The move taken from parent to reach this node
                 if move_idx is not None:
                     # Add value from the perspective of the player whose turn it was AT THE PARENT node
-                    value_to_add = value_estimate if parent_node.game.player == 0 else -value_estimate
+                    # Apply the terminal state weight to value updates
+                    value_to_add = terminal_state_weight * (value_estimate if parent_node.game.player == 0 else -value_estimate)
                     parent_node.child_total_value[move_idx] += value_to_add
                     parent_node.child_number_visits[move_idx] += 1 # Increment parent's child visit count
             
@@ -246,21 +279,60 @@ def make_move_on_board(board: CliqueBoard, move: int) -> CliqueBoard:
     return board
 # --- End restored helper function ---
 
-def get_policy(root: UCTNode) -> np.ndarray:
-    """Calculates the policy based on visit counts stored in the root node."""
-    num_edges = len(root.child_priors) # Use length of priors array for size
+def get_policy(root: UCTNode, temperature: float = 1.0) -> np.ndarray:
+    """
+    Calculates the policy based on visit counts stored in the root node.
+    
+    Args:
+        root: The root MCTS node
+        temperature: Temperature parameter for controlling exploration vs exploitation
+                     - temperature=1.0: standard MCTS policy (proportional to visit counts)
+                     - temperature → 0: deterministic policy (highest visit count only)
+                     - temperature > 1: more uniform policy (more exploration)
+    
+    Returns:
+        policy: Distribution over all possible actions
+    """
+    num_edges = len(root.child_priors)  # Use length of priors array for size
     policy = np.zeros([num_edges], dtype=np.float32)
     
     # Use root.child_number_visits array directly
     visits = root.child_number_visits
-    total_visits = visits.sum()
     
-    if total_visits > 0:
-        policy = visits / total_visits
+    # Apply temperature by raising visits to power of 1/temperature
+    if temperature != 0:
+        # Avoid division by zero
+        # For high temperatures (>1), this will make the policy more uniform
+        # For low temperatures (<1), this will make the policy more deterministic
+        visits_temp = np.power(visits + 1e-8, 1.0 / max(temperature, 1e-8))
+    else:
+        # For temperature=0, use a deterministic policy
+        best_action = np.argmax(visits)
+        visits_temp = np.zeros_like(visits)
+        visits_temp[best_action] = 1.0
     
-    # Apply valid moves mask
+    # Normalize to create a probability distribution
+    total_visits_temp = visits_temp.sum()
+    if total_visits_temp > 0:
+        policy = visits_temp / total_visits_temp
+    
+    # Apply valid moves mask to ensure only valid moves have non-zero probability
     mask = ed.get_valid_moves_mask(root.game)
     policy = ed.apply_valid_moves_mask(policy, mask)
+    
+    # Verify the policy is valid
+    if policy.sum() < 1e-6:
+        # Fallback to uniform policy over valid moves if something went wrong
+        print("Warning: Invalid policy distribution from MCTS. Using uniform fallback.")
+        valid_moves = root.game.get_valid_moves()
+        if valid_moves:
+            uniform_policy = np.zeros([num_edges], dtype=np.float32)
+            for move in valid_moves:
+                move_idx = ed.encode_action(root.game, move)
+                if move_idx >= 0:
+                    uniform_policy[move_idx] = 1.0 / len(valid_moves)
+            policy = uniform_policy
+    
     return policy
 
 def get_q_values(root: UCTNode) -> np.ndarray:
@@ -341,21 +413,40 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
             print(f"Current player: {'Player 1' if board.player == 0 else 'Player 2'}")
             print(board)
             
-            # Get best move using MCTS, passing noise weight
-            best_move, root = UCT_search(board, mcts_sims, clique_net, noise_weight=noise_weight)
+            # Calculate annealing temperature based on move number
+            # Start with high temperature (1.0) for exploration
+            # Gradually decrease as the game progresses for more exploitation
+            max_moves = num_vertices * (num_vertices - 1) // 2
+            move_progress = board.move_count / max_moves
             
-            # Get policy from root node (MCTS)
-            mcts_policy = get_policy(root)
-            print(f"MCTS Policy: {mcts_policy}")
+            # Temperature annealing - high at start, low at end
+            if move_progress < 0.3:  # First 30% of the game
+                temperature = 1.0  # High exploration
+            elif move_progress < 0.6:  # Middle 30% of the game
+                temperature = 0.7  # Moderate exploration
+            else:  # Last 40% of the game
+                temperature = 0.3  # More exploitation
             
-            # Get model's direct policy prediction
+            # Also reduce noise weight as the game progresses
+            current_noise_weight = noise_weight * (1.0 - move_progress)
+            
+            # Get best move using MCTS with adjusted noise weight
+            best_move, root = UCT_search(board, mcts_sims, clique_net, noise_weight=current_noise_weight)
+            
+            # Get policy from root node using temperature
+            mcts_policy = get_policy(root, temperature=temperature)
+            print(f"MCTS Policy (temp={temperature:.2f}): {mcts_policy}")
+            
+            # Get model's direct policy prediction for comparison
             state_dict = ed.prepare_state_for_network(board)
             with torch.no_grad():
-                model_policy, _ = clique_net(state_dict['edge_index'], state_dict['edge_attr'])
+                model_policy, value_estimate = clique_net(state_dict['edge_index'], state_dict['edge_attr'])
                 model_policy = model_policy.squeeze().cpu().numpy()
+                value_estimate = value_estimate.item()
             print(f"Model Policy: {model_policy}")
+            print(f"Model Value Estimate: {value_estimate:.4f}")
             
-            # Use MCTS policy for actual moves
+            # Use MCTS policy for actual moves and training
             policy = mcts_policy
             
             # Store current state and policy
