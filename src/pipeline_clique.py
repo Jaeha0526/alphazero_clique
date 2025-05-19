@@ -12,6 +12,7 @@ import pickle
 import glob
 import json
 import wandb
+import random
 
 from clique_board import CliqueBoard
 from alpha_net_clique import CliqueGNN
@@ -21,7 +22,8 @@ import encoder_decoder_clique as ed
 
 def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN, 
                    num_games: int = 40, num_vertices: int = 6, clique_size: int = 3,
-                   num_mcts_sims: int = 100, game_mode: str = "symmetric") -> float:
+                   num_mcts_sims: int = 100, game_mode: str = "symmetric",
+                   use_policy_only: bool = False) -> float:
     """
     Evaluate the current model against the best model by playing games.
     
@@ -33,6 +35,7 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
         clique_size: Size of clique needed for Player 1 to win
         num_mcts_sims: Number of MCTS simulations per move
         game_mode: "symmetric" or "asymmetric" game mode
+        use_policy_only: If True, select moves directly from policy head output (no MCTS)
         
     Returns:
         win_rate: Win rate of current model against best model
@@ -73,8 +76,36 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
             
             model_to_use = current_model if current_model_turn else best_model
             
-            # Get best move using MCTS
-            best_move, _ = UCT_search(board, num_mcts_sims, model_to_use)
+            # Get best move using MCTS or policy head directly
+            if use_policy_only:
+                # Prepare state for network
+                state_dict = ed.prepare_state_for_network(board)
+                edge_index = state_dict['edge_index'].to(device)
+                edge_attr = state_dict['edge_attr'].to(device)
+                
+                with torch.no_grad():
+                    policy_output, _ = model_to_use(edge_index, edge_attr)
+                
+                policy_output = policy_output.squeeze().cpu().numpy()
+                
+                # Apply valid moves mask
+                valid_moves_mask = ed.get_valid_moves_mask(board)
+                masked_policy = policy_output * valid_moves_mask
+                
+                # Check if there are any valid moves with non-zero probability
+                if masked_policy.sum() > 1e-8:
+                    best_move = np.argmax(masked_policy)
+                else:
+                    # Fallback: Choose a random valid move if policy assigns zero to all
+                    valid_moves = board.get_valid_moves()
+                    if valid_moves:
+                        best_move = ed.encode_action(board, random.choice(valid_moves))
+                    else:
+                        # Should not happen if game loop condition is correct, but handle just in case
+                        best_move = 0 # Or some other default/error handling
+            else:
+                # Original MCTS search
+                best_move, _ = UCT_search(board, num_mcts_sims, model_to_use)
             
             # Make the move
             board = make_move_on_board(board, best_move)
@@ -268,7 +299,8 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
             win_rate_vs_best = evaluate_models(trained_model, best_model_instance, 
                                        num_games=args.num_games, # Use num_games from args
                                        num_vertices=num_vertices, clique_size=clique_size,
-                                       num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode)
+                                       num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode,
+                                       use_policy_only=args.use_policy_only)
 
     # --- 6b. Evaluate Trained vs Initial --- 
     print("Starting evaluation against initial model (iter0)...")
@@ -297,7 +329,15 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
                 win_rate_vs_initial = evaluate_models(trained_model, initial_model, 
                                            num_games=args.num_games, # Use num_games from args
                                            num_vertices=num_vertices, clique_size=clique_size,
-                                           num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode)
+                                           num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode,
+                                           use_policy_only=args.use_policy_only)
+                
+                win_rate_vs_initial_mcts_1 = evaluate_models(trained_model, initial_model, 
+                                           num_games=101, # Use num_games from args
+                                           num_vertices=num_vertices, clique_size=clique_size,
+                                           num_mcts_sims=1, game_mode=game_mode,
+                                           use_policy_only=True)
+                
         except Exception as e:
             print(f"ERROR loading or evaluating against initial model: {e}")
             win_rate_vs_initial = -3.0 # Indicate other error
@@ -325,7 +365,8 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
         "validation_policy_loss": avg_policy_loss,
         "validation_value_loss": avg_value_loss,
         "evaluation_win_rate_vs_best": win_rate_vs_best,
-        "evaluation_win_rate_vs_initial": win_rate_vs_initial # Add new metric
+        "evaluation_win_rate_vs_initial": win_rate_vs_initial,
+        "evaluation_win_rate_vs_initial_mcts_1": win_rate_vs_initial_mcts_1
     }
 
 def run_pipeline(args: argparse.Namespace) -> None:
@@ -416,7 +457,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "epochs": args.epochs,
             "use_legacy_policy_loss": args.use_legacy_policy_loss,
             "min_alpha": args.min_alpha,
-            "max_alpha": args.max_alpha
+            "max_alpha": args.max_alpha,
+            "use_policy_only": args.use_policy_only
         }
         # Save immediately after storing hyperparameters for a new file
         if not os.path.exists(log_file_path):
@@ -731,6 +773,7 @@ if __name__ == "__main__":
     parser.add_argument("--iteration", type=int, default=0, help="Iteration number (for train mode)")
     parser.add_argument("--num-games", type=int, default=21, help="Number of games (for evaluate/play modes)")
     parser.add_argument("--eval-mcts-sims", type=int, default=30, help="Number of MCTS simulations (for evaluate/play modes)")
+    parser.add_argument("--use-policy-only", action='store_true', help="Use policy head output for move selection")
 
     args = parser.parse_args()
 
@@ -819,7 +862,8 @@ if __name__ == "__main__":
                                      num_vertices=args.vertices, 
                                      clique_size=args.k,
                                      num_mcts_sims=args.mcts_sims, 
-                                     game_mode=args.game_mode)
+                                     game_mode=args.game_mode,
+                                     use_policy_only=args.use_policy_only)
             print(f"Evaluation Result (Iter {args.iteration} vs Best): Win Rate = {win_rate:.2f}")
 
     elif args.mode == "play":

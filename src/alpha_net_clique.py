@@ -402,9 +402,11 @@ class CliqueGNN(nn.Module):
         num_graphs = len(num_nodes_per_graph)
         
         # Initialize node features
-        node_indices = torch.arange(len(batch), device=edge_index.device).float().unsqueeze(1)
+        # node_indices = torch.arange(len(batch), device=edge_index.device).float().unsqueeze(1)
+        node_indices = torch.zeros(len(batch), device=edge_index.device).float().unsqueeze(1)
         x = self.node_embedding(node_indices)
         if debug:
+            print(f"[DEBUG] Node indices: {node_indices}")
             print(f"[DEBUG] Node features: {x}")
             print(f"[DEBUG] Edge index: {edge_index}")
             print(f"[DEBUG] Edge index shape: {edge_index.shape}")
@@ -417,6 +419,7 @@ class CliqueGNN(nn.Module):
         if debug:
             print(f"[DEBUG] Edge features: {edge_features}")
             print(f"[DEBUG] Edge features shape: {edge_features.shape}")
+            pass
         
         # Apply GNN layers
         for i, (node_layer, edge_layer) in enumerate(zip(self.node_layers, self.edge_layers)):
