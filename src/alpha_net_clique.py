@@ -128,13 +128,39 @@ class CliqueGameData(Dataset):
     
     def _board_to_graph(self, board_state):
         try:
-            # Check if board_state is already in the correct format
-            if isinstance(board_state, dict) and 'edge_index' in board_state and 'edge_attr' in board_state:
-                return torch.tensor(board_state['edge_index'], dtype=torch.long), \
-                       torch.tensor(board_state['edge_attr'], dtype=torch.float)
+            # FORCE REGENERATION: Always create 15 undirected edges from edge_attr
+            # Even if board_state has edge_index/edge_attr, we need to convert it to 15-edge format
             
-            # If not, try to convert from old format
-            if isinstance(board_state, dict):
+            if isinstance(board_state, dict) and 'edge_index' in board_state and 'edge_attr' in board_state:
+                # Extract existing edge information
+                existing_edge_index = board_state['edge_index']
+                existing_edge_attr = board_state['edge_attr']
+                
+                # Determine number of nodes from edge_index
+                if len(existing_edge_index.shape) == 2:
+                    num_vertices = existing_edge_index.max() + 1
+                else:
+                    num_vertices = 6  # Default fallback
+                
+                print(f"Converting {existing_edge_index.shape[1]} existing edges to {num_vertices*(num_vertices-1)//2} undirected edges")
+                
+                # Create mapping from existing edges to edge states matrix
+                edge_states = np.zeros((num_vertices, num_vertices), dtype=int)
+                
+                # Fill edge_states from existing edge data
+                for i in range(existing_edge_index.shape[1]):
+                    src = existing_edge_index[0, i]
+                    dst = existing_edge_index[1, i]
+                    
+                    # Convert edge_attr to state (find the index of 1.0)
+                    edge_attr_i = existing_edge_attr[i]
+                    state = np.argmax(edge_attr_i)  # Find which of [unselected, p1, p2] is 1
+                    
+                    # Store in symmetric matrix
+                    edge_states[src, dst] = state
+                    edge_states[dst, src] = state
+            
+            elif isinstance(board_state, dict):
                 if 'edge_states' in board_state and 'num_vertices' in board_state:
                     edge_states = board_state['edge_states']
                     num_vertices = board_state['num_vertices']
@@ -152,17 +178,18 @@ class CliqueGameData(Dataset):
             if num_vertices <= 0:
                 raise ValueError(f"Invalid num_vertices: {num_vertices}")
             
-            # Create edge indices for all possible edges
+            # Create edge indices for UNDIRECTED edges only (no bidirectional, no self-loops)
             edge_index = []
             edge_attr = []
             
-            # Add edges between all pairs of vertices
+            # Add only UNDIRECTED edges between all pairs of vertices
+            # This creates exactly n*(n-1)/2 edges
             for i in range(num_vertices):
                 for j in range(i + 1, num_vertices):
                     # Bounds check on edge_states
                     if i < edge_states.shape[0] and j < edge_states.shape[1]:
+                        # Add ONLY the canonical edge (i,j) where i < j
                         edge_index.append([i, j])
-                        edge_index.append([j, i])  # Add reverse edge
                         
                         # Create one-hot encoding for edge state (safely)
                         state = int(edge_states[i, j])
@@ -172,16 +199,12 @@ class CliqueGameData(Dataset):
                         edge_features = [0, 0, 0]  # [unselected, player1, player2]
                         edge_features[state] = 1
                         edge_attr.append(edge_features)
-                        edge_attr.append(edge_features)  # Same features for reverse edge
-            
-            # Add self-loops
-            for i in range(num_vertices):
-                edge_index.append([i, i])
-                edge_attr.append([1, 0, 0])  # Special feature for self-loops
             
             # Check if we have any edges
             if not edge_index:
                 raise ValueError("No edges created in _board_to_graph")
+            
+            print(f"Created {len(edge_index)} undirected edges (expected: {num_vertices*(num_vertices-1)//2})")
             
             return torch.tensor(edge_index, dtype=torch.long).t().contiguous(), \
                    torch.tensor(edge_attr, dtype=torch.float)
@@ -192,9 +215,9 @@ class CliqueGameData(Dataset):
             if isinstance(board_state, dict):
                 print(f"Board state keys: {list(board_state.keys())}")
             
-            # Return a minimal valid graph as a fallback
-            edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long).t()
-            edge_attr = torch.tensor([[1, 0, 0], [1, 0, 0]], dtype=torch.float)
+            # Return a minimal valid graph as a fallback (2 nodes, 1 edge)
+            edge_index = torch.tensor([[0, 1]], dtype=torch.long).t()
+            edge_attr = torch.tensor([[1, 0, 0]], dtype=torch.float)
             return edge_index, edge_attr
 
 # New GNN Block incorporating edge features using MessagePassing
@@ -436,61 +459,61 @@ class CliqueGNN(nn.Module):
         if batch is None:
             batch = torch.zeros(edge_index.max().item() + 1, dtype=torch.long, device=edge_index.device)
         
+        # Convert undirected edges to bidirectional for GNN processing
+        # Input: edge_index has shape [2, num_undirected_edges] with edges (i,j) where i < j
+        # Output: bidirectional_edge_index has shape [2, 2*num_undirected_edges] with both (i,j) and (j,i)
+        
+        if debug:
+            print(f"[DEBUG] Original undirected edge_index: {edge_index}")
+            print(f"[DEBUG] Original edge_index shape: {edge_index.shape}")
+        
+        # Create bidirectional edges for GNN processing
+        reverse_edge_index = torch.stack([edge_index[1], edge_index[0]], dim=0)  # Swap source and target
+        bidirectional_edge_index = torch.cat([edge_index, reverse_edge_index], dim=1)  # Concatenate
+        
+        # Duplicate edge attributes for reverse edges
+        bidirectional_edge_attr = torch.cat([edge_attr, edge_attr], dim=0)
+        
+        if debug:
+            print(f"[DEBUG] Bidirectional edge_index: {bidirectional_edge_index}")
+            print(f"[DEBUG] Bidirectional edge_index shape: {bidirectional_edge_index.shape}")
+            print(f"[DEBUG] Bidirectional edge_attr shape: {bidirectional_edge_attr.shape}")
+        
         # Get number of nodes per graph
         num_nodes_per_graph = torch.bincount(batch)
         num_graphs = len(num_nodes_per_graph)
         
         # Initialize node features
-        # node_indices = torch.arange(len(batch), device=edge_index.device).float().unsqueeze(1)
         node_indices = torch.zeros(len(batch), device=edge_index.device).float().unsqueeze(1)
         x = self.node_embedding(node_indices)
-        if debug:
-            print(f"[DEBUG] Node indices: {node_indices}")
-            print(f"[DEBUG] Node features: {x}")
-            print(f"[DEBUG] Edge index: {edge_index}")
-            print(f"[DEBUG] Edge index shape: {edge_index.shape}")
-            print(f"[DEBUG] Edge attributes: {edge_attr}")
-            print(f"[DEBUG] Edge attributes shape: {edge_attr.shape}")
-            print(f"[DEBUG] Batch: {batch}")
         
-        # Initialize edge features
-        edge_features = self.edge_embedding(edge_attr)
+        # Initialize edge features (use bidirectional versions)
+        edge_features = self.edge_embedding(bidirectional_edge_attr)
+        
         if debug:
-            print(f"[DEBUG] Edge features: {edge_features}")
+            print(f"[DEBUG] Node features shape: {x.shape}")
             print(f"[DEBUG] Edge features shape: {edge_features.shape}")
-            pass
         
-        # Apply GNN layers
+        # Apply GNN layers (using bidirectional edges)
         for i, (node_layer, edge_layer) in enumerate(zip(self.node_layers, self.edge_layers)):
-            # Pass edge_features to the node_layer (EdgeAwareGNNBlock)
-            x_new = node_layer(x, edge_index, edge_features) 
-            edge_features = edge_layer(x, edge_index, edge_features)
+            x_new = node_layer(x, bidirectional_edge_index, edge_features) 
+            edge_features = edge_layer(x, bidirectional_edge_index, edge_features)
             x = x_new
             if debug:
-                print(f"[DEBUG] Edge features after layer {i}: {edge_features}")
-                print(f"[DEBUG] Node features after layer {i}: {x}")
+                print(f"[DEBUG] After layer {i} - Edge features shape: {edge_features.shape}")
         
-        # --- Debug Start --- 
-        # Print sample edge features before policy head
-        # if edge_features.numel() > 0:
-        #      print(f"DEBUG: Edge features into policy_head (sample): {edge_features[0]}")
-        # else:
-        #      print("DEBUG: Edge features tensor is empty!")
-        # --- Debug End --- 
+        # Extract features for original undirected edges only (first half of bidirectional features)
+        num_undirected_edges = edge_index.shape[1]
+        original_edge_features = edge_features[:num_undirected_edges]  # Take first half only
         
-        # Generate edge scores
-        edge_scores = self.policy_head(edge_features)
         if debug:
-            print(f"[DEBUG] Edge scores: {edge_scores}")
-            print(f"[DEBUG] Edge scores shape: {edge_scores.shape}")
+            print(f"[DEBUG] Original edge features shape: {original_edge_features.shape}")
         
-        # --- Debug Start --- 
-        # Print sample edge scores after policy head
-        # if edge_scores.numel() > 0:
-        #      print(f"DEBUG: Edge scores from policy_head (sample): {edge_scores[0]}")
-        # else:
-        #      print("DEBUG: Edge scores tensor is empty!")
-        # --- Debug End ---
+        # Generate edge scores for undirected edges
+        edge_scores = self.policy_head(original_edge_features)
+        
+        if debug:
+            print(f"[DEBUG] Edge scores shape: {edge_scores.shape}")
         
         # Process each graph in the batch separately
         policies = []
@@ -499,107 +522,59 @@ class CliqueGNN(nn.Module):
         # Calculate cumulative sum of nodes for indexing
         node_cumsum = torch.cat([torch.tensor([0], device=edge_index.device), torch.cumsum(num_nodes_per_graph, dim=0)])
         
+        # Calculate cumulative sum of edges for indexing
+        num_edges_per_graph = []
         for i in range(num_graphs):
-            # Get node indices for this graph
             start_idx = node_cumsum[i]
             end_idx = node_cumsum[i + 1]
             num_nodes = num_nodes_per_graph[i]
-            
-            # Get edges for this graph
-            graph_mask = (edge_index[0] >= start_idx) & (edge_index[0] < end_idx)
-            graph_edge_index = edge_index[:, graph_mask]
-            graph_edge_scores = edge_scores[graph_mask]
-            
-            # Calculate number of edges in complete graph for this size
             num_edges = num_nodes * (num_nodes - 1) // 2
+            num_edges_per_graph.append(num_edges)
+        
+        edge_cumsum = torch.cat([torch.tensor([0], device=edge_index.device), 
+                                torch.cumsum(torch.tensor(num_edges_per_graph, device=edge_index.device), dim=0)])
+        
+        for i in range(num_graphs):
+            # Get edge indices for this graph
+            edge_start_idx = edge_cumsum[i]
+            edge_end_idx = edge_cumsum[i + 1]
+            num_edges = num_edges_per_graph[i]
             
-            # Create edge mapping for this graph
-            edge_map = {}
-            idx = 0
-            for j in range(num_nodes):
-                for k in range(j+1, num_nodes):
-                    edge_map[(j, k)] = idx
-                    edge_map[(k, j)] = idx
-                    idx += 1
+            # Extract edge scores for this graph - NOW IT'S DIRECT 1:1 MAPPING!
+            graph_edge_scores = edge_scores[edge_start_idx:edge_end_idx]
             
-            # --- Reworked Mapping Logic ---
-            # Create a temporary dict to hold scores for canonical edges
-            canonical_scores = {}
-            # population_count = 0 # Debug Counter
-            for j in range(graph_edge_index.shape[1]): # Loop through edges found for this graph
-                # Explicitly cast to int after .item()
-                src_item = graph_edge_index[0, j].item() - start_idx
-                dst_item = graph_edge_index[1, j].item() - start_idx
-                src = int(src_item)
-                dst = int(dst_item)
-                
-                if src != dst: # Ignore self-loops for policy assignment
-                     canonical_edge = tuple(sorted((src, dst))) # Key is now definitely (int, int)
-                     # Store the score associated with this edge (take first occurrence if duplicated)
-                     if canonical_edge not in canonical_scores:
-                          score_value = graph_edge_scores[j].item() # Get the score as a float
-                          canonical_scores[canonical_edge] = score_value # Use .item()
-                          # if score_value != 0.0: # Debug Print
-                          #      population_count += 1
-                          #      print(f"DEBUG: Populating canonical_scores[{canonical_edge}] = {score_value}") # ADDED
-
-            # ADDED Debug Print: Show the dictionary contents
-            # print(f"DEBUG: Populated canonical_scores dict ({population_count} non-zero entries): {canonical_scores}")
-    
-            # Now, fill the policy vector using the canonical scores
-            policy = torch.zeros(num_edges, device=edge_index.device)
-            edge_map_items = edge_map.items()
-    
-            # assigned_count = 0 # Debug counter
-            for edge_tuple, edge_idx in edge_map_items:
-                 # edge_map contains both (j,k) and (k,j) mapping to same index
-                 # We only need to assign once per index, using the canonical tuple
-                 canonical_edge = tuple(sorted(edge_tuple))
-                 if edge_tuple == canonical_edge: # Process only for the canonical key e.g. (0, 1) not (1, 0)
-                     score = canonical_scores.get(canonical_edge, 0.0) # Get score, default to 0.0 if missing
-                     policy[edge_idx] = score
-                     # if score != 0.0: # Debug print
-                     #      assigned_count += 1
-                     #      # print(f"DEBUG: Assigning score {score} to index {edge_idx} for edge {canonical_edge}")
-
-            # print(f"DEBUG: Assigned {assigned_count} non-zero scores to policy vector") # Debug print
-            # --- End Reworked Mapping Logic ---
+            if debug:
+                print(f"[DEBUG] Graph {i}: edges {edge_start_idx}:{edge_end_idx}, scores shape: {graph_edge_scores.shape}")
             
-            # Print policy vector before softmax
-            # print(f"DEBUG: Graph {i} Policy before softmax: {policy}")
-            # --- Debug End --- 
+            # Direct mapping: each edge score corresponds directly to a policy index
+            policy = graph_edge_scores.squeeze(-1)  # Remove last dimension if it's 1
             
             # Normalize policy
             policy = F.softmax(policy, dim=0)
             policies.append(policy)
             
-            # Extract nodes and edges for this graph
-            graph_nodes = x[start_idx:end_idx]  # [num_nodes, hidden_dim]
+            # Get node indices for this graph
+            node_start_idx = node_cumsum[i]
+            node_end_idx = node_cumsum[i + 1]
             
-            # Extract edges for this graph 
-            graph_mask = (edge_index[0] >= start_idx) & (edge_index[0] < end_idx)
-            graph_edge_features = edge_features[graph_mask]  # [num_edges, hidden_dim]
+            # Extract nodes and edges for this graph (for value head)
+            graph_nodes = x[node_start_idx:node_end_idx]  # [num_nodes, hidden_dim]
+            graph_edge_features = original_edge_features[edge_start_idx:edge_end_idx]  # [num_edges, hidden_dim]
             
             # Apply attention-based pooling for nodes
-            if len(graph_nodes) > 0:  # Ensure we have nodes
-                # Calculate attention scores for nodes
+            if len(graph_nodes) > 0:
                 node_attn_scores = self.node_attention(graph_nodes)  # [num_nodes, 1]
                 node_attn_weights = F.softmax(node_attn_scores, dim=0)  # [num_nodes, 1]
-                # Weighted sum of node features
                 node_features_pooled = torch.sum(graph_nodes * node_attn_weights, dim=0)  # [hidden_dim]
             else:
-                # Fallback if no nodes (shouldn't happen)
                 node_features_pooled = torch.zeros(self.hidden_dim, device=edge_index.device)
             
             # Apply attention-based pooling for edges
-            if len(graph_edge_features) > 0:  # Ensure we have edges
-                # Calculate attention scores for edges
+            if len(graph_edge_features) > 0:
                 edge_attn_scores = self.edge_attention(graph_edge_features)  # [num_edges, 1]
                 edge_attn_weights = F.softmax(edge_attn_scores, dim=0)  # [num_edges, 1]
-                # Weighted sum of edge features
                 edge_features_pooled = torch.sum(graph_edge_features * edge_attn_weights, dim=0)  # [hidden_dim]
             else:
-                # Fallback if no edges (shouldn't happen)
                 edge_features_pooled = torch.zeros(self.hidden_dim, device=edge_index.device)
             
             # Concatenate node and edge pooled features
@@ -607,10 +582,8 @@ class CliqueGNN(nn.Module):
             
             # Store the combined features for batch processing
             if self.training:
-                # During training, we'll collect all value inputs and process them as a batch
                 values.append(combined_features)  # [2*hidden_dim]
             else:
-                # During inference, handle batch norm for single instance
                 value = self.value_head(combined_features.unsqueeze(0))  # Shape [1, 1]
                 values.append(value)
         
@@ -619,11 +592,9 @@ class CliqueGNN(nn.Module):
         
         # Handle values based on training/inference mode
         if self.training:
-            # In training mode, we process all value inputs together through the value head
             values_tensor = torch.stack(values)  # [num_graphs, 2*hidden_dim]
             values = self.value_head(values_tensor)  # [num_graphs, 1]
         else:
-            # In inference mode, we've already processed each value input separately
             values = torch.stack(values)  # [num_graphs, 1]
         
         return policies, values

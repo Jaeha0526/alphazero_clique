@@ -59,8 +59,8 @@ class UCTNode:
         """Calculate Exploration bonus U for children."""
         # Use self.number_visits (visits TO this node) for sqrt(N(s))
         # Use self.child_number_visits for N(s,a) in denominator
-        # The AlphaZero paper uses c_puct = 1.0, but we can adjust this value
-        c_puct = 2.0  # Increased exploration constant to encourage more exploration
+        # The AlphaZero paper uses c_puct = 1.0, but we're using higher values
+        c_puct = 3.0  # Significantly higher exploration for better search breadth
         sqrt_N_s = math.sqrt(max(1.0, self.number_visits))
         return c_puct * sqrt_N_s * (abs(self.child_priors) / (1.0 + self.child_number_visits))
 
@@ -94,16 +94,15 @@ class UCTNode:
             valid_child_priors = child_priors[action_idxs]
 
             # The AlphaZero paper uses alpha = 0.03 for Chess and 0.3 for Go
-            # For the Clique Game, we use a smaller alpha for sharper noise distribution
-            # This encourages more focused exploration
-            noise_alpha = 0.2
+            # For the Clique Game, we're using a balanced value tuned for 6-vertex graphs
+            noise_alpha = 0.3  # More exploration with slightly more uniform noise
             
             # The value of alpha depends on the number of valid actions
             # For games with fewer legal moves, we want more focused exploration
             if len(action_idxs) < 5:
-                noise_alpha = 0.1  # More focused for small action spaces
+                noise_alpha = 0.15  # Slightly more exploration for small action spaces
             elif len(action_idxs) > 15:
-                noise_alpha = 0.3  # More uniform for large action spaces
+                noise_alpha = 0.4  # More uniform for large action spaces
             
             # Generate Dirichlet noise
             noise = np.random.dirichlet([noise_alpha] * len(action_idxs))
@@ -419,13 +418,17 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
             max_moves = num_vertices * (num_vertices - 1) // 2
             move_progress = board.move_count / max_moves
             
-            # Temperature annealing - high at start, low at end
-            if move_progress < 0.3:  # First 30% of the game
+            # Temperature annealing - more aggressive schedule
+            if move_progress < 0.2:  # First 20% of the game
                 temperature = 1.0  # High exploration
-            elif move_progress < 0.6:  # Middle 30% of the game
-                temperature = 0.7  # Moderate exploration
-            else:  # Last 40% of the game
-                temperature = 0.3  # More exploitation
+            elif move_progress < 0.4:  # Next 20% of the game
+                temperature = 0.8  # Still good exploration
+            elif move_progress < 0.6:  # Middle 20% of the game
+                temperature = 0.5  # Balanced exploration/exploitation
+            elif move_progress < 0.8:  # Next 20% of the game
+                temperature = 0.2  # More exploitation
+            else:  # Last 20% of the game
+                temperature = 0.1  # Strong exploitation
             
             # Also reduce noise weight as the game progresses
             current_noise_weight = noise_weight * (1.0 - move_progress)

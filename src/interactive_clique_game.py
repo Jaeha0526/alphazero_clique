@@ -19,6 +19,8 @@ from encoder_decoder_clique import prepare_state_for_network, encode_action, dec
 import numpy as np
 from MCTS_clique import UCT_search, get_policy, get_q_values
 import time
+import torch.nn as nn
+import torch.nn.functional as F
 
 # Get the current directory of this script
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -50,6 +52,43 @@ game_instances = {}
 #     ...
 
 # --- Helper Functions --- End
+
+def check_model_compatibility(checkpoint, num_vertices, k):
+    """
+    Check if a model checkpoint is compatible with the current architecture.
+    Returns (is_compatible, error_message, suggested_hidden_dim, suggested_num_layers)
+    """
+    try:
+        # Check basic required fields
+        if 'num_vertices' not in checkpoint or 'clique_size' not in checkpoint:
+            return False, "Model missing basic configuration (num_vertices or clique_size)", None, None
+        
+        if checkpoint['num_vertices'] != num_vertices or checkpoint['clique_size'] != k:
+            return False, f"Model configuration mismatch. Game: V={num_vertices}, k={k}. Model: V={checkpoint['num_vertices']}, k={checkpoint['clique_size']}", None, None
+        
+        # Check for basic required structure
+        state_dict = checkpoint['state_dict']
+        required_keys = ['node_embedding.weight', 'edge_embedding.weight']
+        missing_keys = [key for key in required_keys if key not in state_dict]
+        
+        if missing_keys:
+            return False, f"Model is missing required keys: {missing_keys}", None, None
+        
+        # Get model parameters
+        hidden_dim = checkpoint.get('hidden_dim', 64)
+        num_layers = checkpoint.get('num_layers', 2)
+        
+        # Check if it has basic GNN structure
+        has_gnn_layers = any('node_layers' in key for key in state_dict.keys())
+        
+        if not has_gnn_layers:
+            return False, "Model does not have the expected GNN layer structure", hidden_dim, num_layers
+            
+        print(f"Found compatible model (hidden_dim={hidden_dim}, num_layers={num_layers})")
+        return True, "", hidden_dim, num_layers
+        
+    except Exception as e:
+        return False, f"Error checking model compatibility: {e}", None, None
 
 def fig_to_base64(fig):
     """Convert matplotlib figure to base64 string for web display"""
@@ -278,6 +317,8 @@ def list_models(game_id):
     current_k = board.k
 
     compatible_models = []
+    incompatible_models = []
+    
     try:
         # Search for .pth.tar files in the playable_models directory
         model_files = glob.glob(os.path.join(playable_model_dir, "*.pth.tar"))
@@ -286,31 +327,53 @@ def list_models(game_id):
             try:
                 # Load only the metadata first to check compatibility
                 checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
-                if 'num_vertices' in checkpoint and 'clique_size' in checkpoint:
-                    model_num_vertices = checkpoint['num_vertices']
-                    model_k = checkpoint['clique_size']
-
-                    # Check if model parameters match the current game
-                    if model_num_vertices == current_num_vertices and model_k == current_k:
-                        model_info = {
-                            'filename': os.path.basename(model_path),
-                            'path': model_path,
-                            'num_vertices': model_num_vertices,
-                            'k': model_k
-                        }
-                        compatible_models.append(model_info)
+                filename = os.path.basename(model_path)
+                
+                # Use the new compatibility checker
+                is_compatible, error_msg, suggested_hidden_dim, suggested_num_layers = check_model_compatibility(
+                    checkpoint, current_num_vertices, current_k
+                )
+                
+                model_info = {
+                    'filename': filename,
+                    'path': model_path,
+                    'num_vertices': checkpoint.get('num_vertices', 'Missing'),
+                    'k': checkpoint.get('clique_size', 'Missing'),
+                    'hidden_dim': checkpoint.get('hidden_dim', 'Missing'),
+                    'num_layers': checkpoint.get('num_layers', 'Missing'),
+                    'compatible': is_compatible
+                }
+                
+                if is_compatible:
+                    compatible_models.append(model_info)
                 else:
-                     print(f"Skipping model {model_path}: Missing configuration (num_vertices or clique_size).")
+                    model_info['error'] = error_msg
+                    incompatible_models.append(model_info)
 
             except Exception as e:
                 print(f"Error reading metadata from model {model_path}: {e}")
-                continue # Skip problematic files
+                model_info = {
+                    'filename': os.path.basename(model_path),
+                    'path': model_path,
+                    'num_vertices': 'Error',
+                    'k': 'Error',
+                    'hidden_dim': 'Error',
+                    'num_layers': 'Error',
+                    'compatible': False,
+                    'error': str(e)
+                }
+                incompatible_models.append(model_info)
 
     except Exception as e:
         print(f"Error listing models in {playable_model_dir}: {e}")
         return jsonify({'error': 'Failed to list models'}), 500
 
-    return jsonify({'models': compatible_models})
+    return jsonify({
+        'compatible_models': compatible_models,
+        'incompatible_models': incompatible_models,
+        'total_compatible': len(compatible_models),
+        'total_incompatible': len(incompatible_models)
+    })
 
 @app.route('/api/select_model', methods=['POST'])
 def select_model():
@@ -335,25 +398,50 @@ def select_model():
         # Load the full model checkpoint
         checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
 
-        # Verify compatibility again
-        if 'num_vertices' not in checkpoint or 'clique_size' not in checkpoint:
-             return jsonify({'error': 'Model configuration missing in file.'}), 400
-        if checkpoint['num_vertices'] != board.num_vertices or checkpoint['clique_size'] != board.k:
-            return jsonify({'error': f'Model configuration mismatch. Game: V={board.num_vertices}, k={board.k}. Model: V={checkpoint["num_vertices"]}, k={checkpoint["clique_size"]}.'}), 400
+        # Check compatibility with detailed error messages
+        is_compatible, error_msg, suggested_hidden_dim, suggested_num_layers = check_model_compatibility(
+            checkpoint, board.num_vertices, board.k
+        )
+        
+        if not is_compatible:
+            return jsonify({'error': error_msg}), 400
 
-        # Instantiate the model architecture
-        hidden_dim = checkpoint.get('hidden_dim', 64) # Default to 64 if not saved
-        num_layers = checkpoint.get('num_layers', 2)  # Default to 2 if not saved
-        model = CliqueGNN(num_vertices=checkpoint['num_vertices'], hidden_dim=hidden_dim, num_layers=num_layers)
-        model.load_state_dict(checkpoint['state_dict'])
+        # Use the suggested dimensions from compatibility check
+        hidden_dim = suggested_hidden_dim
+        num_layers = suggested_num_layers
+        
+        print(f"Loading model with hidden_dim={hidden_dim}, num_layers={num_layers}")
+
+        # Use FlexibleCliqueGNN that can adapt to the checkpoint
+        model = FlexibleCliqueGNN(
+            num_vertices=checkpoint['num_vertices'], 
+            hidden_dim=hidden_dim, 
+            num_layers=num_layers,
+            checkpoint_state_dict=checkpoint['state_dict']
+        )
+        
+        # Load the state dict
+        try:
+            model.load_state_dict(checkpoint['state_dict'])
+        except RuntimeError as e:
+            print(f"Warning: Partial state dict loading: {e}")
+            # Try partial loading
+            model_dict = model.state_dict()
+            pretrained_dict = {k: v for k, v in checkpoint['state_dict'].items() 
+                             if k in model_dict and model_dict[k].shape == v.shape}
+            model_dict.update(pretrained_dict)
+            model.load_state_dict(model_dict)
+            print(f"Successfully loaded {len(pretrained_dict)} out of {len(checkpoint['state_dict'])} parameters")
+                
         model.eval() # Set to evaluation mode
 
         # Store the loaded model in the game instance
         game_data['model'] = model
         game_data['model_path'] = model_path
 
-        print(f"Game {game_id}: Selected model '{model_filename}'")
-        return jsonify({'message': f'Model {model_filename} selected successfully.'})
+        success_msg = f'Model {model_filename} selected successfully.'
+        print(f"Game {game_id}: {success_msg}")
+        return jsonify({'message': success_msg})
 
     except Exception as e:
         print(f"Error loading model {model_filename} for game {game_id}: {e}")
@@ -574,6 +662,230 @@ def list_all_models():
         print(f"No .pth.tar files found in {playable_model_dir}")
 
     return jsonify({'models': all_models_info})
+
+class FlexibleCliqueGNN(CliqueGNN):
+    """
+    Flexible version of CliqueGNN that can adapt to different model architectures.
+    """
+    def __init__(self, num_vertices=6, hidden_dim=64, num_layers=2, checkpoint_state_dict=None):
+        # Don't call super().__init__ yet, we need to analyze the checkpoint first
+        nn.Module.__init__(self)
+        self.hidden_dim = hidden_dim
+        
+        # Input embedding layers
+        self.node_embedding = nn.Linear(1, hidden_dim)
+        self.edge_embedding = nn.Linear(3, hidden_dim)
+        
+        # Initialize embeddings
+        nn.init.xavier_uniform_(self.node_embedding.weight)
+        nn.init.xavier_uniform_(self.edge_embedding.weight)
+        
+        # Dynamically create GNN layers
+        self.node_layers = nn.ModuleList()
+        self.edge_layers = nn.ModuleList()
+        for _ in range(num_layers):
+            from alpha_net_clique import EdgeAwareGNNBlock, EdgeBlock
+            self.node_layers.append(EdgeAwareGNNBlock(hidden_dim, hidden_dim, hidden_dim))
+            self.edge_layers.append(EdgeBlock(hidden_dim, hidden_dim, hidden_dim))
+        
+        # Policy head (same for all architectures)
+        self.policy_head = nn.Sequential(
+            nn.Linear(hidden_dim, 2*hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(2*hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+        
+        # Initialize policy head
+        for m in self.policy_head.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        
+        # Analyze checkpoint to determine architecture
+        if checkpoint_state_dict is not None:
+            has_attention = any('attention' in key for key in checkpoint_state_dict.keys())
+            
+            # Check value head input size from checkpoint
+            value_head_input_size = hidden_dim  # Default
+            if 'value_head.0.weight' in checkpoint_state_dict:
+                value_head_input_size = checkpoint_state_dict['value_head.0.weight'].shape[0]
+            
+            print(f"Detected value head input size: {value_head_input_size}, has attention: {has_attention}")
+            
+        else:
+            # Default to new architecture
+            has_attention = True
+            value_head_input_size = 2 * hidden_dim
+        
+        # Create appropriate architecture
+        if has_attention:
+            # New architecture with attention
+            self.node_attention = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 4),
+                nn.Tanh(),
+                nn.Linear(hidden_dim // 4, 1)
+            )
+            
+            self.edge_attention = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 4),
+                nn.Tanh(),
+                nn.Linear(hidden_dim // 4, 1)
+            )
+            
+            # Value head expects 2*hidden_dim input
+            self.value_head = nn.Sequential(
+                nn.BatchNorm1d(2*hidden_dim),
+                nn.Linear(2*hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(hidden_dim, 1),
+                nn.Tanh()
+            )
+            
+        else:
+            # Older architecture without attention
+            self.node_attention = None
+            self.edge_attention = None
+            
+            # Value head expects hidden_dim input (global pooled features)
+            self.value_head = nn.Sequential(
+                nn.BatchNorm1d(value_head_input_size),
+                nn.Linear(value_head_input_size, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(hidden_dim, 1),
+                nn.Tanh()
+            )
+        
+        # Initialize value head
+        for m in self.value_head.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+                    
+        self.has_attention = has_attention
+    
+    def forward(self, edge_index, edge_attr, batch=None, debug=False):
+        # Same as parent class until value calculation
+        if batch is None:
+            batch = torch.zeros(edge_index.max().item() + 1, dtype=torch.long, device=edge_index.device)
+        
+        num_nodes_per_graph = torch.bincount(batch)
+        num_graphs = len(num_nodes_per_graph)
+        
+        # Initialize node and edge features
+        node_indices = torch.zeros(len(batch), device=edge_index.device).float().unsqueeze(1)
+        x = self.node_embedding(node_indices)
+        edge_features = self.edge_embedding(edge_attr)
+        
+        # Apply GNN layers
+        for i, (node_layer, edge_layer) in enumerate(zip(self.node_layers, self.edge_layers)):
+            x_new = node_layer(x, edge_index, edge_features) 
+            edge_features = edge_layer(x, edge_index, edge_features)
+            x = x_new
+        
+        # Generate edge scores
+        edge_scores = self.policy_head(edge_features)
+        
+        # Process each graph separately
+        policies = []
+        values = []
+        
+        node_cumsum = torch.cat([torch.tensor([0], device=edge_index.device), torch.cumsum(num_nodes_per_graph, dim=0)])
+        
+        for i in range(num_graphs):
+            start_idx = node_cumsum[i]
+            end_idx = node_cumsum[i + 1]
+            num_nodes = num_nodes_per_graph[i]
+            
+            graph_mask = (edge_index[0] >= start_idx) & (edge_index[0] < end_idx)
+            graph_edge_index = edge_index[:, graph_mask]
+            graph_edge_scores = edge_scores[graph_mask]
+            
+            # Create policy (same logic as parent)
+            num_edges = num_nodes * (num_nodes - 1) // 2
+            edge_map = {}
+            idx = 0
+            for j in range(num_nodes):
+                for k in range(j+1, num_nodes):
+                    edge_map[(j, k)] = idx
+                    edge_map[(k, j)] = idx
+                    idx += 1
+            
+            canonical_scores = {}
+            for j in range(graph_edge_index.shape[1]):
+                src = int(graph_edge_index[0, j].item() - start_idx)
+                dst = int(graph_edge_index[1, j].item() - start_idx)
+                
+                if src != dst:
+                     canonical_edge = tuple(sorted((src, dst)))
+                     if canonical_edge not in canonical_scores:
+                          canonical_scores[canonical_edge] = graph_edge_scores[j].item()
+
+            policy = torch.zeros(num_edges, device=edge_index.device)
+            for edge_tuple, edge_idx in edge_map.items():
+                 canonical_edge = tuple(sorted(edge_tuple))
+                 if edge_tuple == canonical_edge:
+                     policy[edge_idx] = canonical_scores.get(canonical_edge, 0.0)
+            
+            policy = F.softmax(policy, dim=0)
+            policies.append(policy)
+            
+            # Value calculation - depends on architecture
+            graph_nodes = x[start_idx:end_idx]
+            
+            if self.has_attention:
+                # New architecture with attention pooling
+                graph_edge_features = edge_features[graph_mask]
+                
+                if len(graph_nodes) > 0:
+                    node_attn_scores = self.node_attention(graph_nodes)
+                    node_attn_weights = F.softmax(node_attn_scores, dim=0)
+                    node_features_pooled = torch.sum(graph_nodes * node_attn_weights, dim=0)
+                else:
+                    node_features_pooled = torch.zeros(self.hidden_dim, device=edge_index.device)
+                
+                if len(graph_edge_features) > 0:
+                    edge_attn_scores = self.edge_attention(graph_edge_features)
+                    edge_attn_weights = F.softmax(edge_attn_scores, dim=0)
+                    edge_features_pooled = torch.sum(graph_edge_features * edge_attn_weights, dim=0)
+                else:
+                    edge_features_pooled = torch.zeros(self.hidden_dim, device=edge_index.device)
+                
+                combined_features = torch.cat([node_features_pooled, edge_features_pooled], dim=0)
+                
+                if self.training:
+                    values.append(combined_features)
+                else:
+                    value = self.value_head(combined_features.unsqueeze(0))
+                    values.append(value)
+            else:
+                # Older architecture with simple global pooling
+                if len(graph_nodes) > 0:
+                    node_features_pooled = torch.mean(graph_nodes, dim=0)
+                else:
+                    node_features_pooled = torch.zeros(self.hidden_dim, device=edge_index.device)
+                
+                value = self.value_head(node_features_pooled.unsqueeze(0))
+                values.append(value)
+        
+        policies = torch.stack(policies)
+        
+        if self.has_attention and self.training:
+            values_tensor = torch.stack(values)
+            values = self.value_head(values_tensor)
+        else:
+            values = torch.stack(values)
+        
+        return policies, values
 
 if __name__ == '__main__':
     # Create templates directory if it doesn't exist

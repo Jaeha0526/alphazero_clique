@@ -20,10 +20,10 @@ def main():
     parser.add_argument("--num-layers", type=int, default=3, help="Number of GNN layers")
     
     # Training parameters
-    parser.add_argument("--iterations", type=int, default=20, help="Number of pipeline iterations")
-    parser.add_argument("--self-play-games", type=int, default=50, help="Self-play games per iteration")
+    parser.add_argument("--iterations", type=int, default=30, help="Number of pipeline iterations")
+    parser.add_argument("--self-play-games", type=int, default=100, help="Self-play games per iteration")
     parser.add_argument("--mcts-sims", type=int, default=1000, help="MCTS simulations per move")
-    parser.add_argument("--num-cpus", type=int, default=4, help="Number of CPUs for parallel execution")
+    parser.add_argument("--num-cpus", type=int, default=6, help="Number of CPUs for parallel execution")
     
     # Training hyperparameters
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for training")
@@ -36,12 +36,13 @@ def main():
     # Evaluation parameters
     parser.add_argument("--eval-threshold", type=float, default=0.52, help="Win rate threshold for best model update")
     parser.add_argument("--num-games", type=int, default=21, help="Number of evaluation games")
+    parser.add_argument("--mcts-sims-eval", type=int, default=30, help="MCTS simulations for evaluation")
     
     args = parser.parse_args()
     
     # Generate a unique experiment name with timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    experiment_name = (f"improved_n{args.vertices}k{args.k}_h{args.hidden_dim}_l{args.num_layers}_"
+    experiment_name = (f"improved_attn_value_n{args.vertices}k{args.k}_h{args.hidden_dim}_l{args.num_layers}_"
                        f"mcts{args.mcts_sims}_{timestamp}")
     
     print(f"Starting improved AlphaZero training with experiment name: {experiment_name}")
