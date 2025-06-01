@@ -23,6 +23,7 @@ import encoder_decoder_clique as ed
 def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN, 
                    num_games: int = 40, num_vertices: int = 6, clique_size: int = 3,
                    num_mcts_sims: int = 100, game_mode: str = "symmetric",
+                   perspective_mode: str = "alternating",
                    use_policy_only: bool = False) -> float:
     """
     Evaluate the current model against the best model by playing games.
@@ -35,6 +36,7 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
         clique_size: Size of clique needed for Player 1 to win
         num_mcts_sims: Number of MCTS simulations per move
         game_mode: "symmetric" or "asymmetric" game mode
+        perspective_mode: "fixed" or "alternating" for value perspective
         use_policy_only: If True, select moves directly from policy head output (no MCTS)
         
     Returns:
@@ -105,7 +107,8 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
                         best_move = 0 # Or some other default/error handling
             else:
                 # Original MCTS search
-                best_move, _ = UCT_search(board, num_mcts_sims, model_to_use)
+                best_move, _ = UCT_search(board, num_mcts_sims, model_to_use, 
+                                        perspective_mode=perspective_mode)
             
             # Make the move
             board = make_move_on_board(board, best_move)
@@ -234,7 +237,7 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
         # Add remainder games to first process
         games = games_per_cpu + (remainder if i == 0 else 0)
         p = mp.Process(target=MCTS_self_play, 
-                      args=(model_for_self_play, games, num_vertices, clique_size, i, mcts_sims, game_mode, iteration, data_dir))
+                      args=(model_for_self_play, games, num_vertices, clique_size, i, mcts_sims, game_mode, iteration, data_dir, args.perspective_mode))
         p.start()
         processes.append(p)
     for p in processes:
@@ -300,6 +303,7 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
                                        num_games=args.num_games, # Use num_games from args
                                        num_vertices=num_vertices, clique_size=clique_size,
                                        num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode,
+                                       perspective_mode=args.perspective_mode,
                                        use_policy_only=args.use_policy_only)
 
     # --- 6b. Evaluate Trained vs Initial --- 
@@ -330,12 +334,14 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
                                            num_games=args.num_games, # Use num_games from args
                                            num_vertices=num_vertices, clique_size=clique_size,
                                            num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode,
+                                           perspective_mode=args.perspective_mode,
                                            use_policy_only=args.use_policy_only)
                 
                 win_rate_vs_initial_mcts_1 = evaluate_models(trained_model, initial_model, 
                                            num_games=101, # Use num_games from args
                                            num_vertices=num_vertices, clique_size=clique_size,
                                            num_mcts_sims=1, game_mode=game_mode,
+                                           perspective_mode=args.perspective_mode,
                                            use_policy_only=True)
                 
         except Exception as e:
@@ -396,12 +402,14 @@ def run_pipeline(args: argparse.Namespace) -> None:
     # Initialize wandb
     wandb_run = None # Initialize to None
     try:
+        # Create a unique run ID with timestamp to avoid conflicts
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         wandb_run = wandb.init(
             project="alphazero_clique", # Set your project name
-            name=args.experiment_name,  # Use experiment name for the run name
+            name=f"{args.experiment_name}_{timestamp}",  # Add timestamp to run name
             config=vars(args),          # Log all command line args
             resume="allow",             # Allow resuming if the run exists
-            id=f"pipeline_{args.experiment_name}" # Unique ID based on experiment name
+            id=f"pipeline_{args.experiment_name}_{timestamp}" # Unique ID with timestamp
         )
         print("Weights & Biases initialized successfully.")
     except Exception as e:
@@ -459,7 +467,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "min_alpha": args.min_alpha,
             "max_alpha": args.max_alpha,
             "value_weight": args.value_weight,
-            "use_policy_only": args.use_policy_only
+            "use_policy_only": args.use_policy_only,
+            "perspective_mode": args.perspective_mode
         }
         # Save immediately after storing hyperparameters for a new file
         if not os.path.exists(log_file_path):
@@ -627,7 +636,8 @@ def plot_learning_curve(log_file_path: str):
     plt.close(fig) # Close the figure to free memory
 
 def play_against_ai(model_path: str = None, num_vertices: int = 6, clique_size: int = 3, 
-                   num_mcts_sims: int = 200, human_player: int = 0):
+                   num_mcts_sims: int = 200, perspective_mode: str = "alternating", 
+                   human_player: int = 0):
     """
     Play a game against the trained AI.
     
@@ -701,7 +711,8 @@ def play_against_ai(model_path: str = None, num_vertices: int = 6, clique_size: 
             print("\nAI is thinking...")
             
             # Get best move using MCTS
-            best_move, _ = UCT_search(board, num_mcts_sims, model)
+            best_move, _ = UCT_search(board, num_mcts_sims, model, 
+                                    perspective_mode=perspective_mode)
             
             # Make the move
             edge = ed.decode_action(board, best_move)
@@ -770,6 +781,11 @@ if __name__ == "__main__":
     parser.add_argument("--min-alpha", type=float, default=0.5, help="Weight factor for the value loss component")
     parser.add_argument("--max-alpha", type=float, default=100.0, help="Weight factor for the value loss component")
     parser.add_argument("--value-weight", type=float, default=1.0, help="Weight for value loss in the combined loss function")
+    
+    # Add perspective mode option
+    parser.add_argument("--perspective-mode", type=str, default="alternating", 
+                        choices=["fixed", "alternating"], 
+                        help="Value perspective mode: 'fixed' (always from Player 1) or 'alternating' (from current player)")
 
     # Specific mode parameters (can add more if needed, e.g., model paths for evaluate/play)
     parser.add_argument("--iteration", type=int, default=0, help="Iteration number (for train mode)")
@@ -811,15 +827,16 @@ if __name__ == "__main__":
             model.share_memory() # Important for multiprocessing
             model.eval()
             
-            MCTS_self_play(model=model, 
+            MCTS_self_play(clique_net=model, 
                            num_games=args.self_play_games, 
                            num_vertices=args.vertices, # Use game vertices
-                           k=args.k,                   # Use game k
-                           process_id=0, 
+                           clique_size=args.k,                   # Use game k
+                           cpu=0, 
                            mcts_sims=args.mcts_sims, 
                            game_mode=args.game_mode, 
                            iteration=args.iteration, # Pass iteration if needed for saving
-                           data_dir=data_base_dir) 
+                           data_dir=data_base_dir,
+                           perspective_mode=args.perspective_mode) 
                            
     elif args.mode == "train":
         print("Running Training Only Mode")
@@ -865,6 +882,7 @@ if __name__ == "__main__":
                                      clique_size=args.k,
                                      num_mcts_sims=args.mcts_sims, 
                                      game_mode=args.game_mode,
+                                     perspective_mode=args.perspective_mode,
                                      use_policy_only=args.use_policy_only)
             print(f"Evaluation Result (Iter {args.iteration} vs Best): Win Rate = {win_rate:.2f}")
 
@@ -882,4 +900,5 @@ if __name__ == "__main__":
             model.load_state_dict(checkpoint['state_dict'])
             model.eval()
             
-            play_against_ai(model, args.vertices, args.k, args.mcts_sims, args.game_mode) 
+            play_against_ai(model_path, args.vertices, args.k, args.mcts_sims, 
+                          args.perspective_mode, human_player=0) 

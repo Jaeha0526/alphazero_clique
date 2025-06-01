@@ -128,37 +128,22 @@ class CliqueGameData(Dataset):
     
     def _board_to_graph(self, board_state):
         try:
-            # FORCE REGENERATION: Always create 15 undirected edges from edge_attr
-            # Even if board_state has edge_index/edge_attr, we need to convert it to 15-edge format
-            
+            # If board state already has edge_index and edge_attr, use them directly
             if isinstance(board_state, dict) and 'edge_index' in board_state and 'edge_attr' in board_state:
-                # Extract existing edge information
-                existing_edge_index = board_state['edge_index']
-                existing_edge_attr = board_state['edge_attr']
+                edge_index = board_state['edge_index']
+                edge_attr = board_state['edge_attr']
                 
-                # Determine number of nodes from edge_index
-                if len(existing_edge_index.shape) == 2:
-                    num_vertices = existing_edge_index.max() + 1
-                else:
-                    num_vertices = 6  # Default fallback
+                # Ensure tensors
+                if isinstance(edge_index, np.ndarray):
+                    edge_index = torch.tensor(edge_index, dtype=torch.long)
+                if isinstance(edge_attr, np.ndarray):
+                    edge_attr = torch.tensor(edge_attr, dtype=torch.float)
                 
-                print(f"Converting {existing_edge_index.shape[1]} existing edges to {num_vertices*(num_vertices-1)//2} undirected edges")
+                # Ensure correct shape [2, num_edges]
+                if edge_index.shape[0] != 2 and edge_index.shape[1] == 2:
+                    edge_index = edge_index.t()
                 
-                # Create mapping from existing edges to edge states matrix
-                edge_states = np.zeros((num_vertices, num_vertices), dtype=int)
-                
-                # Fill edge_states from existing edge data
-                for i in range(existing_edge_index.shape[1]):
-                    src = existing_edge_index[0, i]
-                    dst = existing_edge_index[1, i]
-                    
-                    # Convert edge_attr to state (find the index of 1.0)
-                    edge_attr_i = existing_edge_attr[i]
-                    state = np.argmax(edge_attr_i)  # Find which of [unselected, p1, p2] is 1
-                    
-                    # Store in symmetric matrix
-                    edge_states[src, dst] = state
-                    edge_states[dst, src] = state
+                return edge_index.contiguous(), edge_attr
             
             elif isinstance(board_state, dict):
                 if 'edge_states' in board_state and 'num_vertices' in board_state:
@@ -204,7 +189,12 @@ class CliqueGameData(Dataset):
             if not edge_index:
                 raise ValueError("No edges created in _board_to_graph")
             
-            print(f"Created {len(edge_index)} undirected edges (expected: {num_vertices*(num_vertices-1)//2})")
+            # Debug: verify we created the correct number of edges
+            if DEBUG:
+                expected_edges = num_vertices * (num_vertices - 1) // 2
+                actual_edges = len(edge_index)
+                if actual_edges != expected_edges:
+                    print(f"Warning: Created {actual_edges} edges, expected {expected_edges}")
             
             return torch.tensor(edge_index, dtype=torch.long).t().contiguous(), \
                    torch.tensor(edge_attr, dtype=torch.float)
@@ -220,10 +210,11 @@ class CliqueGameData(Dataset):
             edge_attr = torch.tensor([[1, 0, 0]], dtype=torch.float)
             return edge_index, edge_attr
 
-# New GNN Block incorporating edge features using MessagePassing
+# GNN Block for undirected graphs incorporating edge features using MessagePassing
 class EdgeAwareGNNBlock(MessagePassing):
     def __init__(self, node_dim, edge_dim, out_dim):
-        super().__init__(aggr='add') # Use 'add' aggregation
+        # Use 'mean' aggregation for undirected graphs to avoid double-counting
+        super().__init__(aggr='mean', flow='source_to_target')
         # Linear layer to process concatenated node and edge features for message creation
         self.lin_message = nn.Linear(node_dim + edge_dim, out_dim)
         # Layer normalization applied AFTER residual addition
@@ -239,12 +230,17 @@ class EdgeAwareGNNBlock(MessagePassing):
 
     def forward(self, x, edge_index, edge_attr):
         # x: [N, node_dim], Node features
-        # edge_index: [2, E], Graph connectivity
+        # edge_index: [2, E], Graph connectivity (undirected edges)
         # edge_attr: [E, edge_dim], Edge features
-
-        # Start the message passing process.
-        # The `message` method now includes ReLU.
-        aggregated_messages = self.propagate(edge_index, x=x, edge_attr=edge_attr)
+        
+        # For undirected edges, we need to ensure messages flow both ways
+        # PyTorch Geometric handles this automatically when using undirected edge_index
+        row, col = edge_index
+        edge_index_bidirectional = torch.cat([edge_index, torch.stack([col, row])], dim=1)
+        edge_attr_bidirectional = torch.cat([edge_attr, edge_attr], dim=0)
+        
+        # Start the message passing process with bidirectional edges
+        aggregated_messages = self.propagate(edge_index_bidirectional, x=x, edge_attr=edge_attr_bidirectional)
 
         # Add residual connection (transform original x if needed)
         residual = self.lin_skip(x)
@@ -298,35 +294,45 @@ class EdgeBlock(nn.Module):
             self.lin_skip = nn.Identity()
 
     def forward(self, x, edge_index, edge_attr):
-        # Get source and target node features
-        src, dst = edge_index[0], edge_index[1]
-
-        # Gather node features for each edge
-        src_features = x[src]  # [num_edges, node_dim]
-        dst_features = x[dst]  # [num_edges, node_dim]
+        # For undirected edges, we need to process both directions
+        # Create bidirectional edge index for gathering node features
+        row, col = edge_index[0], edge_index[1]
+        edge_index_bidirectional = torch.cat([edge_index, torch.stack([col, row])], dim=1)
+        
+        # Get source and target node features for bidirectional edges
+        src, dst = edge_index_bidirectional[0], edge_index_bidirectional[1]
+        
+        # Gather node features for each directed edge
+        src_features = x[src]  # [2*num_edges, node_dim]
+        dst_features = x[dst]  # [2*num_edges, node_dim]
 
         # Concatenate source and destination features
-        node_features = torch.cat([src_features, dst_features], dim=1)  # [num_edges, 2*node_dim]
-
+        node_features = torch.cat([src_features, dst_features], dim=1)  # [2*num_edges, 2*node_dim]
+        
+        # Duplicate edge attributes for bidirectional processing
+        edge_attr_bidirectional = torch.cat([edge_attr, edge_attr], dim=0)  # [2*num_edges, edge_dim]
+        
         # Project node and edge features
-        # Apply activation after projection?
-        projected_node_features = F.relu(self.node_proj(node_features))  # [num_edges, out_dim]
-        projected_edge_features = F.relu(self.edge_proj(edge_attr))  # [num_edges, out_dim]
-
+        projected_node_features = F.relu(self.node_proj(node_features))  # [2*num_edges, out_dim]
+        projected_edge_features = F.relu(self.edge_proj(edge_attr_bidirectional))  # [2*num_edges, out_dim]
+        
         # Combine node and edge information
-        combined = torch.cat([projected_node_features, projected_edge_features], dim=1)  # [num_edges, 2*out_dim]
-        combined_out = self.combine(combined)  # [num_edges, out_dim]
-        # Apply activation after combine?
+        combined = torch.cat([projected_node_features, projected_edge_features], dim=1)  # [2*num_edges, 2*out_dim]
+        combined_out = self.combine(combined)  # [2*num_edges, out_dim]
         combined_activated = F.relu(combined_out)
-
+        
+        # Aggregate bidirectional edge features back to undirected
+        # Take mean of features from both directions (i->j and j->i)
+        num_undirected = edge_attr.shape[0]
+        undirected_features = (combined_activated[:num_undirected] + combined_activated[num_undirected:]) / 2.0
+        
         # Add residual connection (transform original edge_attr if needed)
         residual = self.lin_skip(edge_attr)
-        out = combined_activated + residual
-
+        out = undirected_features + residual
+        
         # Apply layer normalization AFTER residual connection
         out = self.layer_norm(out)
-
-        # No final activation here
+        
         return out
 
 class EnhancedPolicyHead(nn.Module):
@@ -433,6 +439,7 @@ class CliqueGNN(nn.Module):
         
         # Enhanced value head that combines both node and edge features
         # Input size is 2*hidden_dim (concatenated node and edge global features)
+        # Output: Expected game outcome from current player's perspective (-1 to +1)
         self.value_head = nn.Sequential(
             nn.BatchNorm1d(2*hidden_dim),  # Batch norm for combined features
             nn.Linear(2*hidden_dim, hidden_dim),
@@ -459,25 +466,13 @@ class CliqueGNN(nn.Module):
         if batch is None:
             batch = torch.zeros(edge_index.max().item() + 1, dtype=torch.long, device=edge_index.device)
         
-        # Convert undirected edges to bidirectional for GNN processing
+        # Work directly with undirected edges - no conversion needed
         # Input: edge_index has shape [2, num_undirected_edges] with edges (i,j) where i < j
-        # Output: bidirectional_edge_index has shape [2, 2*num_undirected_edges] with both (i,j) and (j,i)
+        # PyTorch Geometric will handle bidirectional message passing automatically
         
         if debug:
-            print(f"[DEBUG] Original undirected edge_index: {edge_index}")
-            print(f"[DEBUG] Original edge_index shape: {edge_index.shape}")
-        
-        # Create bidirectional edges for GNN processing
-        reverse_edge_index = torch.stack([edge_index[1], edge_index[0]], dim=0)  # Swap source and target
-        bidirectional_edge_index = torch.cat([edge_index, reverse_edge_index], dim=1)  # Concatenate
-        
-        # Duplicate edge attributes for reverse edges
-        bidirectional_edge_attr = torch.cat([edge_attr, edge_attr], dim=0)
-        
-        if debug:
-            print(f"[DEBUG] Bidirectional edge_index: {bidirectional_edge_index}")
-            print(f"[DEBUG] Bidirectional edge_index shape: {bidirectional_edge_index.shape}")
-            print(f"[DEBUG] Bidirectional edge_attr shape: {bidirectional_edge_attr.shape}")
+            print(f"[DEBUG] Undirected edge_index shape: {edge_index.shape}")
+            print(f"[DEBUG] Edge_attr shape: {edge_attr.shape}")
         
         # Get number of nodes per graph
         num_nodes_per_graph = torch.bincount(batch)
@@ -487,30 +482,23 @@ class CliqueGNN(nn.Module):
         node_indices = torch.zeros(len(batch), device=edge_index.device).float().unsqueeze(1)
         x = self.node_embedding(node_indices)
         
-        # Initialize edge features (use bidirectional versions)
-        edge_features = self.edge_embedding(bidirectional_edge_attr)
+        # Initialize edge features for undirected edges
+        edge_features = self.edge_embedding(edge_attr)
         
         if debug:
             print(f"[DEBUG] Node features shape: {x.shape}")
             print(f"[DEBUG] Edge features shape: {edge_features.shape}")
         
-        # Apply GNN layers (using bidirectional edges)
+        # Apply GNN layers - they will handle undirected edges properly
         for i, (node_layer, edge_layer) in enumerate(zip(self.node_layers, self.edge_layers)):
-            x_new = node_layer(x, bidirectional_edge_index, edge_features) 
-            edge_features = edge_layer(x, bidirectional_edge_index, edge_features)
+            x_new = node_layer(x, edge_index, edge_features) 
+            edge_features = edge_layer(x, edge_index, edge_features)
             x = x_new
             if debug:
                 print(f"[DEBUG] After layer {i} - Edge features shape: {edge_features.shape}")
         
-        # Extract features for original undirected edges only (first half of bidirectional features)
-        num_undirected_edges = edge_index.shape[1]
-        original_edge_features = edge_features[:num_undirected_edges]  # Take first half only
-        
-        if debug:
-            print(f"[DEBUG] Original edge features shape: {original_edge_features.shape}")
-        
-        # Generate edge scores for undirected edges
-        edge_scores = self.policy_head(original_edge_features)
+        # Generate edge scores directly for undirected edges
+        edge_scores = self.policy_head(edge_features)
         
         if debug:
             print(f"[DEBUG] Edge scores shape: {edge_scores.shape}")
@@ -559,7 +547,7 @@ class CliqueGNN(nn.Module):
             
             # Extract nodes and edges for this graph (for value head)
             graph_nodes = x[node_start_idx:node_end_idx]  # [num_nodes, hidden_dim]
-            graph_edge_features = original_edge_features[edge_start_idx:edge_end_idx]  # [num_edges, hidden_dim]
+            graph_edge_features = edge_features[edge_start_idx:edge_end_idx]  # [num_edges, hidden_dim]
             
             # Apply attention-based pooling for nodes
             if len(graph_nodes) > 0:

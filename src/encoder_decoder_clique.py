@@ -112,15 +112,14 @@ def prepare_state_for_network(board) -> Dict[str, Any]:
     board_state = board.get_board_state()
     num_vertices = board.num_vertices
     
-    # Get edge indices
+    # Get edge indices for UNDIRECTED edges only
     edge_indices = []
     edge_features = []
     
     for i in range(num_vertices):
         for j in range(i+1, num_vertices):
-            # Add both directions for undirected graph
+            # Add only one edge per pair (undirected)
             edge_indices.append([i, j])
-            edge_indices.append([j, i])
             
             # One-hot encode the edge state
             state = board_state['edge_states'][i, j]
@@ -132,16 +131,10 @@ def prepare_state_for_network(board) -> Dict[str, Any]:
                 feat = [0, 0, 1]
             
             edge_features.append(feat)
-            edge_features.append(feat)  # Same feature for both directions
-    
-    # Add self-loops for each vertex with special feature
-    for i in range(num_vertices):
-        edge_indices.append([i, i])
-        edge_features.append([0, 0, 0])  # Special feature for self-loops
     
     # Convert to PyTorch tensors (leave on CPU - device will be set by caller)
-    edge_index = torch.tensor(edge_indices, dtype=torch.long).t()  # Shape [2, E]
-    edge_attr = torch.tensor(edge_features, dtype=torch.float)     # Shape [E, 3]
+    edge_index = torch.tensor(edge_indices, dtype=torch.long).t()  # Shape [2, num_edges]
+    edge_attr = torch.tensor(edge_features, dtype=torch.float)     # Shape [num_edges, 3]
     
     return {
         'edge_index': edge_index,

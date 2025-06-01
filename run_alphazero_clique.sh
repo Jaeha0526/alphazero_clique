@@ -69,11 +69,11 @@ python src/pipeline_clique.py \
     --hidden-dim 128 \
     --num-layers 3 \
     --iterations 50 \
-    --self-play-games 60 \
+    --self-play-games 18 \
     --mcts-sims 1500 \
-    --num-cpus 20 \
+    --num-cpus 6 \
     --batch-size 64 \
-    --epochs 10 \
+    --epochs 30 \
     --initial-lr 0.0003 \
     --lr-factor 0.5 \
     --lr-patience 3 \

@@ -179,10 +179,15 @@ class UCTNode:
                 copy_board, move, parent=self)
         return self.children[move]
     
-    def backup(self, value_estimate: float) -> None:
-        """Propagate the estimated value up the tree, updating stats."""
+    def backup(self, value_estimate: float, perspective_mode: str = "alternating") -> None:
+        """Propagate the estimated value up the tree, updating stats.
+        
+        Args:
+            value_estimate: Value from either fixed (P1) or alternating (current player) perspective
+            perspective_mode: "fixed" or "alternating"
+        """
         node = self
-        # value_estimate is always from P1's perspective
+        current_value = value_estimate
         
         # For terminal nodes, we apply a higher weight to reinforce learning of winning/losing positions
         # This can help the network more quickly learn the value of terminal states
@@ -199,16 +204,29 @@ class UCTNode:
             if parent_node is not None:
                 move_idx = node.move # The move taken from parent to reach this node
                 if move_idx is not None:
-                    # Add value from the perspective of the player whose turn it was AT THE PARENT node
-                    # Apply the terminal state weight to value updates
-                    value_to_add = terminal_state_weight * (value_estimate if parent_node.game.player == 0 else -value_estimate)
+                    if perspective_mode == "fixed":
+                        # Fixed perspective: value is always from P1's perspective
+                        # Need to flip if parent is P2
+                        value_to_add = terminal_state_weight * (current_value if parent_node.game.player == 0 else -current_value)
+                    else:  # alternating
+                        # Alternating perspective: value flips at each level
+                        value_from_parent_perspective = -current_value
+                        value_to_add = terminal_state_weight * value_from_parent_perspective
+                    
                     parent_node.child_total_value[move_idx] += value_to_add
                     parent_node.child_number_visits[move_idx] += 1 # Increment parent's child visit count
+            
+            # Update current_value for next level
+            if perspective_mode == "alternating":
+                # Flip value for next level up (alternating players)
+                current_value = -current_value
+            # For fixed perspective, current_value stays the same
             
             # Move up the tree for the next iteration
             node = parent_node
 
 def UCT_search(game_state: CliqueBoard, num_reads: int, net: nn.Module,
+               perspective_mode: str = "alternating", 
                noise_weight: float = 0.25) -> Tuple[int, UCTNode]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net = net.to(device)
@@ -230,22 +248,33 @@ def UCT_search(game_state: CliqueBoard, num_reads: int, net: nn.Module,
                 value_estimate = value_estimate.item()
                 
             if leaf.game.game_state != 0 or not leaf.game.get_valid_moves():
-                # If game is over, use the game result for backup
-                if leaf.game.game_state == 1:  # Player 1 wins
-                    value = 1.0
-                elif leaf.game.game_state == 2:  # Player 2 wins
-                    value = -1.0
-                else:  # Draw or ongoing but no valid moves
-                    value = 0.0
+                # If game is over, use the game result based on perspective mode
+                if perspective_mode == "fixed":
+                    # Fixed perspective: always from Player 1's perspective
+                    if leaf.game.game_state == 1:  # Player 1 wins
+                        value = 1.0
+                    elif leaf.game.game_state == 2:  # Player 2 wins
+                        value = -1.0
+                    else:  # Draw or ongoing but no valid moves
+                        value = 0.0
+                else:  # alternating
+                    # Alternating perspective: from current player's perspective
+                    current_player = leaf.game.player
+                    if leaf.game.game_state == 1:  # Player 1 wins
+                        value = 1.0 if current_player == 0 else -1.0
+                    elif leaf.game.game_state == 2:  # Player 2 wins
+                        value = -1.0 if current_player == 0 else 1.0
+                    else:  # Draw or ongoing but no valid moves
+                        value = 0.0
                     
-                leaf.backup(value)
+                leaf.backup(value, perspective_mode)
                 continue
                 
             # Expand the leaf node, passing noise weight
             # expand now correctly sets self.child_priors
             leaf.expand(child_priors, noise_weight)
             # Backup the value estimate from the network
-            leaf.backup(value_estimate)
+            leaf.backup(value_estimate, perspective_mode)
             
         except Exception as e:
             print(f"Error during MCTS simulation {i}: {e}") # Added print
@@ -370,7 +399,7 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
                    num_vertices: int = 6, clique_size: int = 3, cpu: int = 0,
                    mcts_sims: int = 500, game_mode: str = "symmetric",
                    iteration: int = 0, data_dir: str = "./datasets/clique",
-                   noise_weight: float = 0.25) -> None:
+                   perspective_mode: str = "alternating", noise_weight: float = 0.25) -> None:
     """
     Run self-play games using MCTS and save the games.
     
@@ -384,6 +413,7 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
         game_mode: "symmetric" or "asymmetric" game mode
         iteration: Current iteration number
         data_dir: Directory to save game data
+        perspective_mode: "fixed" (Player 1) or "alternating" (current player)
         noise_weight: Weight for Dirichlet noise during self-play (0 to disable)
     """
     print(f"Starting self-play on CPU {cpu} for iteration {iteration}")
@@ -434,7 +464,9 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
             current_noise_weight = noise_weight * (1.0 - move_progress)
             
             # Get best move using MCTS with adjusted noise weight
-            best_move, root = UCT_search(board, mcts_sims, clique_net, noise_weight=current_noise_weight)
+            best_move, root = UCT_search(board, mcts_sims, clique_net, 
+                                        perspective_mode=perspective_mode, 
+                                        noise_weight=current_noise_weight)
             
             # Get policy from root node using temperature
             mcts_policy = get_policy(root, temperature=temperature)
@@ -491,10 +523,29 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
                 'edge_index': state_dict['edge_index'].numpy(),
                 'edge_attr': state_dict['edge_attr'].numpy()
             }
+            # Get value based on perspective mode
+            if perspective_mode == "fixed":
+                # Fixed perspective: always from Player 1's perspective
+                if board.game_state == 1:  # Player 1 wins
+                    value = 1.0
+                elif board.game_state == 2:  # Player 2 wins
+                    value = -1.0
+                else:  # Draw
+                    value = 0.0
+            else:  # alternating
+                # Alternating perspective: from current player's perspective
+                current_player = game_states[i].player
+                if board.game_state == 1:  # Player 1 wins
+                    value = 1.0 if current_player == 0 else -1.0
+                elif board.game_state == 2:  # Player 2 wins
+                    value = -1.0 if current_player == 0 else 1.0
+                else:  # Draw
+                    value = 0.0
+            
             example = {
                 'board_state': board_state,
                 'policy': policies[i],
-                'value': 1.0 if board.game_state == 1 else -1.0 if board.game_state == 2 else 0.0
+                'value': value
             }
             game_examples.append(example)
         
@@ -536,4 +587,5 @@ if __name__ == "__main__":
     net.share_memory()
     
     # Start self-play process, passing noise weight from args
-    MCTS_self_play(net, args.num_games, args.vertices, args.clique_size, args.cpu, args.mcts_sims, args.game_mode, noise_weight=args.noise_weight) 
+    MCTS_self_play(net, args.num_games, args.vertices, args.clique_size, args.cpu, args.mcts_sims, args.game_mode, 
+                   perspective_mode="alternating", noise_weight=args.noise_weight) 
