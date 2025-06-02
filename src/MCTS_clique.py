@@ -371,6 +371,33 @@ def get_q_values(root: UCTNode) -> np.ndarray:
     # Q for invalid moves will also be 0.
     return q_values
 
+def get_varied_mcts_sims(base_sims: int, skill_variation: float) -> Tuple[int, int]:
+    """
+    Get varied MCTS simulation counts for both players based on skill variation.
+    
+    Args:
+        base_sims: Base number of MCTS simulations
+        skill_variation: Variation parameter (0 = no variation, higher = more variation)
+                        When > 0, players get different simulation counts randomly
+    
+    Returns:
+        Tuple of (player1_sims, player2_sims)
+    """
+    if skill_variation <= 0:
+        # No variation - both players use same simulation count
+        return base_sims, base_sims
+    
+    # Generate random variations for each player
+    # Use skill_variation as the coefficient of variation (std/mean)
+    # This creates a normal distribution around base_sims
+    player1_multiplier = max(0.1, np.random.normal(1.0, skill_variation))
+    player2_multiplier = max(0.1, np.random.normal(1.0, skill_variation))
+    
+    player1_sims = max(1, int(base_sims * player1_multiplier))
+    player2_sims = max(1, int(base_sims * player2_multiplier))
+    
+    return player1_sims, player2_sims
+
 def save_as_pickle(filename: str, data: List) -> None:
     """Save data to a pickle file.
     
@@ -399,7 +426,8 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
                    num_vertices: int = 6, clique_size: int = 3, cpu: int = 0,
                    mcts_sims: int = 500, game_mode: str = "symmetric",
                    iteration: int = 0, data_dir: str = "./datasets/clique",
-                   perspective_mode: str = "alternating", noise_weight: float = 0.25) -> None:
+                   perspective_mode: str = "alternating", noise_weight: float = 0.25,
+                   skill_variation: float = 0.0) -> None:
     """
     Run self-play games using MCTS and save the games.
     
@@ -415,6 +443,7 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
         data_dir: Directory to save game data
         perspective_mode: "fixed" (Player 1) or "alternating" (current player)
         noise_weight: Weight for Dirichlet noise during self-play (0 to disable)
+        skill_variation: Variation in MCTS simulation counts (0 = no variation)
     """
     print(f"Starting self-play on CPU {cpu} for iteration {iteration}")
     
@@ -423,6 +452,11 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
     
     for game_idx in range(num_games):
         print(f"\nCPU {cpu}: Starting game {game_idx+1}/{num_games}")
+        
+        # Get varied MCTS simulation counts for this game
+        player1_sims, player2_sims = get_varied_mcts_sims(mcts_sims, skill_variation)
+        if skill_variation > 0:
+            print(f"Skill variation enabled: P1={player1_sims} sims, P2={player2_sims} sims")
         
         # Initialize a new game
         board = CliqueBoard(num_vertices, clique_size, game_mode)
@@ -463,8 +497,11 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
             # Also reduce noise weight as the game progresses
             current_noise_weight = noise_weight * (1.0 - move_progress)
             
-            # Get best move using MCTS with adjusted noise weight
-            best_move, root = UCT_search(board, mcts_sims, clique_net, 
+            # Use player-specific simulation counts based on skill variation
+            current_mcts_sims = player1_sims if board.player == 0 else player2_sims
+            
+            # Get best move using MCTS with adjusted noise weight and player-specific sims
+            best_move, root = UCT_search(board, current_mcts_sims, clique_net, 
                                         perspective_mode=perspective_mode, 
                                         noise_weight=current_noise_weight)
             
@@ -588,4 +625,4 @@ if __name__ == "__main__":
     
     # Start self-play process, passing noise weight from args
     MCTS_self_play(net, args.num_games, args.vertices, args.clique_size, args.cpu, args.mcts_sims, args.game_mode, 
-                   perspective_mode="alternating", noise_weight=args.noise_weight) 
+                   perspective_mode="alternating", noise_weight=args.noise_weight, skill_variation=0.0) 

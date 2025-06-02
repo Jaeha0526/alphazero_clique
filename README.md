@@ -1,6 +1,13 @@
 # AlphaZero Clique Game
 
-This project implements the AlphaZero algorithm for the Clique Game, using Graph Neural Networks and Monte Carlo Tree Search.
+This project implements the AlphaZero algorithm for the Clique Game, using Graph Neural Networks (GNNs) and Monte Carlo Tree Search (MCTS).
+
+**Key Features:**
+- **Undirected Graph GNN:** Optimized GNN architecture working directly with undirected edges
+- **Flexible Value Learning:** Supports both fixed and alternating perspective modes for better value learning
+- **Draw-Heavy Scenario Support:** Skill variation and specialized evaluation metrics for challenging game configurations
+- **Experiment Management:** Organized experiment tracking with comprehensive logging and analysis tools
+
 Main structure of the code originated from https://github.com/geochri/AlphaZero_Chess
 
 ## Installation
@@ -32,6 +39,7 @@ The requirements.txt file includes the following key dependencies:
 - tqdm>=4.65.0: For progress bars
 - torch-geometric>=2.0.4: For graph neural networks
 - pandas>=1.3.5: For data manipulation
+- wandb: For experiment tracking (optional)
 
 ## Game Rules
 
@@ -107,9 +115,18 @@ python src/pipeline_clique.py --mode pipeline \
                              --lr-threshold 0.003 \
                              --batch-size 128 \
                              --epochs 10 \
-                             --use-legacy-policy-loss \
-                             --experiment-name n6k3_h128_l3 \
+                             --perspective-mode alternating \
+                             --skill-variation 0.0 \
+                             --value-weight 1.0 \
+                             --experiment-name n6k3_h128_l3
 ```
+
+**Quick Start Workflow:**
+
+1. **Start with small experiments** (n=6, k=3) to verify setup
+2. **Use skill variation** for draw-heavy scenarios (n=7, k=4)
+3. **Monitor progress** with training logs and optional wandb
+4. **Compare experiments** using analysis scripts
 
 **Pipeline Arguments Detailed:**
 
@@ -121,19 +138,51 @@ The pipeline will:
 
 1.  Create experiment-specific directories.
 2.  Run multiple iterations, generating self-play data, training the network, and evaluating.
-3.  Save the best model (e.g., `clique_net.pth.tar`) and per-iteration models (e.g., `clique_net_iterN.pth.tar`) in `./model_data/<experiment_name>/`.
+3.  Save the best model (e.g., `clique_net.pth.tar`) and per-iteration models (e.g., `clique_net_iterN.pth.tar`) in `./experiments/<experiment_name>/models/`.
     *   **Model Compatibility:** Models saved by the pipeline now include `num_vertices`, `clique_size`, `hidden_dim`, and `num_layers`, allowing them to be loaded by the interactive game's AI feature.
-4.  Store training examples (`.pkl` files) in `./datasets/clique/<experiment_name>/`.
-5.  Log training progress and results in `./model_data/<experiment_name>/experiment_log.json`.
+4.  Store training examples (`.pkl` files) in `./experiments/<experiment_name>/datasets/`.
+5.  Log training progress and results in `./experiments/<experiment_name>/training_log.json`.
+
+## Handling Draw-Heavy Scenarios
+
+For challenging game configurations (e.g., n=7, k=4) where many games end in draws, the pipeline includes several features to improve training:
+
+**Skill Variation (`--skill-variation`):**
+- Randomly varies MCTS simulation counts between players
+- Creates skill imbalances that lead to more decisive games
+- Provides better value learning signal by reducing draw rates
+
+**Dual Evaluation Metrics:**
+- **Best Model Updates:** Uses win rate from decided games only (excludes draws)
+- **Progress Monitoring:** Uses traditional win rate including draws as losses
+- This allows model progression in draw-heavy scenarios while still tracking overall performance
+
+**Perspective Mode (`--perspective-mode`):**
+- `alternating` (recommended): Values from current player's perspective
+- `fixed`: Values always from Player 1's perspective
+- Alternating mode typically provides better value learning
+
+**Example for Draw-Heavy Scenario (n=7, k=4):**
+```bash
+python src/pipeline_clique.py --mode pipeline \
+                             --vertices 7 \
+                             --k 4 \
+                             --skill-variation 0.3 \
+                             --perspective-mode alternating \
+                             --eval-threshold 0.6 \
+                             --experiment-name n7k4_skill_var
+```
 
 ## Project Structure
 
 ```
 alphazero_clique/
 ├── playable_models/        # Directory to place trained models for the interactive UI
-├── model_data/             # Stores models and logs from pipeline runs (organized by experiment)
-├── datasets/
-│   └── clique/             # Stores self-play game data (organized by experiment)
+├── experiments/            # Experiment-specific directories (organized by experiment name)
+│   └── <experiment_name>/
+│       ├── models/         # Stores trained models (clique_net.pth.tar, clique_net_iterN.pth.tar)
+│       ├── datasets/       # Stores self-play game data (.pkl files)
+│       └── training_log.json # Training progress and evaluation metrics
 ├── src/
 │   ├── pipeline_clique.py      # Main AlphaZero pipeline script & modes
 │   ├── interactive_clique_game.py  # Web interface server (Flask)
@@ -144,13 +193,55 @@ alphazero_clique/
 │   ├── encoder_decoder_clique.py # Helpers for board state/action encoding
 │   ├── visualize_clique.py     # Board visualization helpers
 │   └── check_model_keys.py     # Utility script to inspect saved model files
+├── compare_perspectives.py     # Compare fixed vs alternating perspective experiments
+├── analyze_data.py             # Data analysis utilities for training logs
+├── policy_analysis.py          # Policy prediction analysis
+├── action_sequence_analysis.py # Game action sequence analysis
 ├── templates/
 │   └── index.html            # HTML template for the web interface
 ├── static/
 │   └── ...                   # CSS/JS for the web interface (if separated)
 ├── requirements.txt            # Project dependencies
-└── README.md                   # This file
+├── README.md                   # This file
+└── TRAINING_IMPROVEMENTS.md    # Detailed documentation of training improvements and fixes
 ```
+
+## Analysis and Utilities
+
+Several analysis scripts are available to evaluate experiments and compare results:
+
+**Compare Perspective Modes:**
+```bash
+python compare_perspectives.py
+```
+Compares training results between fixed and alternating perspective experiments, generating comparison plots and detailed statistics.
+
+**Analyze Training Data:**
+```bash
+python analyze_data.py
+```
+Analyzes training logs and generates visualizations of learning progress.
+
+**Policy Analysis:**
+```bash
+python policy_analysis.py
+```
+Examines policy predictions and decision patterns from trained models.
+
+**Action Sequence Analysis:**
+```bash
+python action_sequence_analysis.py
+```
+Analyzes game action sequences and patterns from self-play data.
+
+## Experiment Tracking
+
+The pipeline includes optional integration with [Weights & Biases (wandb)](https://wandb.ai/) for experiment tracking and visualization:
+
+- Training metrics are automatically logged to wandb if available
+- Each experiment gets a unique run name with timestamp
+- All hyperparameters and results are tracked
+- If wandb is not available or fails to initialize, training continues normally with local logging only
 
 ## License
 
@@ -184,8 +275,17 @@ The `pipeline_clique.py` script accepts various command-line arguments to config
 | `--use-legacy-policy-loss`    | flag    | `False`     | If set, use the older (potentially unstable) policy loss calculation method.     |
 | `--min-alpha`                 | float   | 0.5         | Minimum clipping value for the dynamically calculated value loss weight (`alpha`). | 
 | `--max-alpha`                 | float   | 100.0       | Maximum clipping value for the dynamically calculated value loss weight (`alpha`). | 
+| `--perspective-mode`          | str     | `alternating` | Value perspective mode: `fixed` (always from Player 1) or `alternating` (from current player). |
+| `--skill-variation`           | float   | 0.0         | Variation in MCTS simulation counts (0 = no variation, higher = more variation for reducing draws). |
+| `--value-weight`              | float   | 1.0         | Weight for value loss in the combined loss function (higher = more emphasis on value learning). |
+| `--use-policy-only`           | flag    | `False`     | If set, select moves directly from policy head output during evaluation (no MCTS). |
 | `--iteration`                 | int     | 0           | Iteration number (used specifically for `train` mode).                           |
 | `--num-games`                 | int     | 21          | Number of games to play (used for `evaluate` and `play` modes).                  |
 | `--eval-mcts-sims`            | int     | 30          | Number of MCTS simulations per move during evaluation/play modes.                |
 
-**Note:** The `min-alpha` and `max-alpha` arguments define the clipping range for the value loss weight, which is dynamically calculated as `alpha = policy_loss.detach() / (value_loss.detach() + 1e-6)` during training in `alpha_net_clique.py`.
+**Notes:** 
+- The `min-alpha` and `max-alpha` arguments define the clipping range for the value loss weight, which is dynamically calculated as `alpha = policy_loss.detach() / (value_loss.detach() + 1e-6)` during training in `alpha_net_clique.py`.
+- **Perspective Mode:** `alternating` mode (default) provides better value learning by using the current player's perspective, while `fixed` mode always uses Player 1's perspective.
+- **Skill Variation:** Useful for draw-heavy scenarios (e.g., n=7, k=4) where random MCTS simulation count differences between players create skill imbalances, leading to more decisive games and better value learning signal.
+- **Model Evaluation:** Best model updates use win rate calculated from decided games only (excluding draws), while initial model comparisons include draws as losses to show overall performance.
+- **Policy-Only Mode:** When `--use-policy-only` is enabled, moves are selected directly from the neural network's policy head without MCTS search, useful for faster evaluation and testing raw policy quality.

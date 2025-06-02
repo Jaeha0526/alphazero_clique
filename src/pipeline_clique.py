@@ -24,7 +24,8 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
                    num_games: int = 40, num_vertices: int = 6, clique_size: int = 3,
                    num_mcts_sims: int = 100, game_mode: str = "symmetric",
                    perspective_mode: str = "alternating",
-                   use_policy_only: bool = False) -> float:
+                   use_policy_only: bool = False, 
+                   decided_games_only: bool = False) -> float:
     """
     Evaluate the current model against the best model by playing games.
     
@@ -38,6 +39,7 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
         game_mode: "symmetric" or "asymmetric" game mode
         perspective_mode: "fixed" or "alternating" for value perspective
         use_policy_only: If True, select moves directly from policy head output (no MCTS)
+        decided_games_only: If True, calculate win rate from decided games only (exclude draws)
         
     Returns:
         win_rate: Win rate of current model against best model
@@ -151,10 +153,26 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
         print(f"Game {game_idx+1} result: {result} (Player 1: {player1}, Player 2: {player2})")
     
     # Calculate win rate
-    win_rate = current_model_wins / (current_model_wins + best_model_wins + draws)
-    print(f"Evaluation complete: Current model wins: {current_model_wins}, "
-          f"Best model wins: {best_model_wins}, Draws: {draws}")
-    print(f"Current model win rate: {win_rate:.4f}")
+    if decided_games_only:
+        # Calculate win rate based only on decided games (exclude draws)
+        decided_games = current_model_wins + best_model_wins
+        if decided_games > 0:
+            win_rate = current_model_wins / decided_games
+            print(f"Evaluation complete: Current model wins: {current_model_wins}, "
+                  f"Best model wins: {best_model_wins}, Draws: {draws}")
+            print(f"Decided games: {decided_games}, Current model win rate (decided games only): {win_rate:.4f}")
+        else:
+            # All games were draws - treat as neutral (50% win rate)
+            win_rate = 0.5
+            print(f"Evaluation complete: All {draws} games ended in draws.")
+            print(f"Using neutral win rate of 0.5 for model comparison.")
+    else:
+        # Traditional win rate calculation (including draws as losses)
+        total_games = current_model_wins + best_model_wins + draws
+        win_rate = current_model_wins / total_games
+        print(f"Evaluation complete: Current model wins: {current_model_wins}, "
+              f"Best model wins: {best_model_wins}, Draws: {draws}")
+        print(f"Current model win rate (all games): {win_rate:.4f}")
     
     return win_rate
 
@@ -237,7 +255,7 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
         # Add remainder games to first process
         games = games_per_cpu + (remainder if i == 0 else 0)
         p = mp.Process(target=MCTS_self_play, 
-                      args=(model_for_self_play, games, num_vertices, clique_size, i, mcts_sims, game_mode, iteration, data_dir, args.perspective_mode))
+                      args=(model_for_self_play, games, num_vertices, clique_size, i, mcts_sims, game_mode, iteration, data_dir, args.perspective_mode, 0.25, args.skill_variation))
         p.start()
         processes.append(p)
     for p in processes:
@@ -298,13 +316,14 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
             best_model_instance.load_state_dict(checkpoint_best['state_dict'])
             best_model_instance.eval()
             
-            # Run evaluation games
+            # Run evaluation games (decided games only for best model update)
             win_rate_vs_best = evaluate_models(trained_model, best_model_instance, 
                                        num_games=args.num_games, # Use num_games from args
                                        num_vertices=num_vertices, clique_size=clique_size,
                                        num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode,
                                        perspective_mode=args.perspective_mode,
-                                       use_policy_only=args.use_policy_only)
+                                       use_policy_only=args.use_policy_only,
+                                       decided_games_only=True)
 
     # --- 6b. Evaluate Trained vs Initial --- 
     print("Starting evaluation against initial model (iter0)...")
@@ -329,20 +348,22 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
                 initial_model.eval()
                 print("Loaded initial model for comparison.")
                 
-                # Run evaluation games (trained vs initial)
+                # Run evaluation games (trained vs initial) - include draws as losses
                 win_rate_vs_initial = evaluate_models(trained_model, initial_model, 
                                            num_games=args.num_games, # Use num_games from args
                                            num_vertices=num_vertices, clique_size=clique_size,
                                            num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode,
                                            perspective_mode=args.perspective_mode,
-                                           use_policy_only=args.use_policy_only)
+                                           use_policy_only=args.use_policy_only,
+                                           decided_games_only=False)
                 
                 win_rate_vs_initial_mcts_1 = evaluate_models(trained_model, initial_model, 
                                            num_games=101, # Use num_games from args
                                            num_vertices=num_vertices, clique_size=clique_size,
                                            num_mcts_sims=1, game_mode=game_mode,
                                            perspective_mode=args.perspective_mode,
-                                           use_policy_only=True)
+                                           use_policy_only=True,
+                                           decided_games_only=False)
                 
         except Exception as e:
             print(f"ERROR loading or evaluating against initial model: {e}")
@@ -468,7 +489,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "max_alpha": args.max_alpha,
             "value_weight": args.value_weight,
             "use_policy_only": args.use_policy_only,
-            "perspective_mode": args.perspective_mode
+            "perspective_mode": args.perspective_mode,
+            "skill_variation": args.skill_variation
         }
         # Save immediately after storing hyperparameters for a new file
         if not os.path.exists(log_file_path):
@@ -786,6 +808,10 @@ if __name__ == "__main__":
     parser.add_argument("--perspective-mode", type=str, default="alternating", 
                         choices=["fixed", "alternating"], 
                         help="Value perspective mode: 'fixed' (always from Player 1) or 'alternating' (from current player)")
+    
+    # Add skill variation option
+    parser.add_argument("--skill-variation", type=float, default=0.0, 
+                        help="Skill variation in MCTS simulation counts (0 = no variation, higher = more variation)")
 
     # Specific mode parameters (can add more if needed, e.g., model paths for evaluate/play)
     parser.add_argument("--iteration", type=int, default=0, help="Iteration number (for train mode)")
@@ -836,7 +862,8 @@ if __name__ == "__main__":
                            game_mode=args.game_mode, 
                            iteration=args.iteration, # Pass iteration if needed for saving
                            data_dir=data_base_dir,
-                           perspective_mode=args.perspective_mode) 
+                           perspective_mode=args.perspective_mode,
+                           skill_variation=args.skill_variation) 
                            
     elif args.mode == "train":
         print("Running Training Only Mode")
@@ -883,7 +910,8 @@ if __name__ == "__main__":
                                      num_mcts_sims=args.mcts_sims, 
                                      game_mode=args.game_mode,
                                      perspective_mode=args.perspective_mode,
-                                     use_policy_only=args.use_policy_only)
+                                     use_policy_only=args.use_policy_only,
+                                     decided_games_only=True)
             print(f"Evaluation Result (Iter {args.iteration} vs Best): Win Rate = {win_rate:.2f}")
 
     elif args.mode == "play":
