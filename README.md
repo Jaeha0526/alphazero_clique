@@ -173,6 +173,64 @@ python src/pipeline_clique.py --mode pipeline \
                              --experiment-name n7k4_skill_var
 ```
 
+## Graph Neural Network Architecture
+
+Our AlphaZero implementation uses a specialized Graph Neural Network (GNN) designed for the Clique Game:
+
+### **Graph Representation**
+- **Nodes**: Represent vertices in the graph (initialized with zero features to preserve permutation symmetry)
+- **Edges**: Represent potential connections between vertices with 3-dimensional features:
+  - `[1,0,0]`: Unselected edge (available for play)
+  - `[0,1,0]`: Edge selected by Player 1
+  - `[0,0,1]`: Edge selected by Player 2
+
+### **Core Architecture Components**
+
+**1. Input Embeddings:**
+- Node embedding: Maps 1D node indices to `hidden_dim` features
+- Edge embedding: Maps 3D edge states to `hidden_dim` features
+
+**2. GNN Layers (configurable with `--num-layers`):**
+- **EdgeAwareGNNBlock**: Message passing that combines node and edge features
+  - Uses `mean` aggregation for undirected graphs
+  - Includes residual connections and layer normalization
+  - Messages: `ReLU(Linear(concat(node_features, edge_features)))`
+- **EdgeBlock**: Updates edge features based on connected node pairs
+  - Processes both directions (i→j and j→i) then averages
+  - Residual connections preserve information flow
+
+**3. Dual Output Heads:**
+- **Policy Head**: Predicts move probabilities for each possible edge
+  - Applied per-edge to generate action probabilities
+  - Uses dropout and multiple linear layers
+- **Value Head**: Predicts game outcome from current position
+  - Global attention pooling combines node and edge information
+  - Outputs value ∈ [-1, +1] representing expected outcome
+
+### **Key Design Decisions**
+
+**Undirected Edge Processing:**
+- Works directly with undirected edges (n*(n-1)/2 edges for n vertices)
+- Handles bidirectional message passing automatically
+- More efficient than creating explicit bidirectional edges
+
+**Permutation Symmetry:**
+- All nodes initialized with identical zero features
+- Symmetry preserved throughout the network
+- Allows model to generalize across vertex relabelings
+
+**Attention-Based Pooling:**
+- Separate attention mechanisms for nodes and edges
+- Learns to focus on relevant graph regions
+- Combines global node and edge representations for value prediction
+
+### **Architecture Flexibility**
+- `--hidden-dim`: Controls feature dimensionality (default: 64)
+- `--num-layers`: Number of GNN layer pairs (default: 2)
+- Scalable to different graph sizes (tested on n=6,7 vertices)
+
+This architecture efficiently captures both local edge relationships and global graph structure essential for strategic game play.
+
 ## Project Structure
 
 ```
