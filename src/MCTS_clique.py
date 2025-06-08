@@ -377,7 +377,7 @@ def get_varied_mcts_sims(base_sims: int, skill_variation: float) -> Tuple[int, i
     
     Args:
         base_sims: Base number of MCTS simulations
-        skill_variation: Variation parameter (0 = no variation, higher = more variation)
+        skill_variation: Percentage variation (0.0 to 1.0). E.g., 0.3 = ±30% variation
                         When > 0, players get different simulation counts randomly
     
     Returns:
@@ -387,14 +387,19 @@ def get_varied_mcts_sims(base_sims: int, skill_variation: float) -> Tuple[int, i
         # No variation - both players use same simulation count
         return base_sims, base_sims
     
-    # Generate random variations for each player
-    # Use skill_variation as the coefficient of variation (std/mean)
-    # This creates a normal distribution around base_sims
-    player1_multiplier = max(0.1, np.random.normal(1.0, skill_variation))
-    player2_multiplier = max(0.1, np.random.normal(1.0, skill_variation))
+    # Clamp skill_variation to reasonable bounds
+    skill_variation = min(skill_variation, 0.8)  # Max 80% variation
     
-    player1_sims = max(1, int(base_sims * player1_multiplier))
-    player2_sims = max(1, int(base_sims * player2_multiplier))
+    # Generate percentage-based variations for each player
+    # Use uniform distribution within the specified percentage bounds
+    min_factor = 1.0 - skill_variation
+    max_factor = 1.0 + skill_variation
+    
+    player1_factor = np.random.uniform(min_factor, max_factor)
+    player2_factor = np.random.uniform(min_factor, max_factor)
+    
+    player1_sims = max(1, int(base_sims * player1_factor))
+    player2_sims = max(1, int(base_sims * player2_factor))
     
     return player1_sims, player2_sims
 
