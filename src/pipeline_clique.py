@@ -420,22 +420,28 @@ def run_pipeline(args: argparse.Namespace) -> None:
     print(f"Model Dir: {model_dir}")
     print(f"Log File: {log_file_path}")
 
-    # Initialize wandb
-    wandb_run = None # Initialize to None
-    try:
-        # Create a unique run ID with timestamp to avoid conflicts
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        wandb_run = wandb.init(
-            project="alphazero_clique", # Set your project name
-            name=f"{args.experiment_name}_{timestamp}",  # Add timestamp to run name
-            config=vars(args),          # Log all command line args
-            resume="allow",             # Allow resuming if the run exists
-            id=f"pipeline_{args.experiment_name}_{timestamp}" # Unique ID with timestamp
-        )
-        print("Weights & Biases initialized successfully.")
-    except Exception as e:
-        print(f"Could not initialize Weights & Biases: {e}. Skipping wandb logging.")
-        # wandb_run remains None
+    # Check if wandb is already initialized (for sweeps)
+    wandb_run = wandb.run if wandb.run is not None else None
+    
+    if wandb_run is None:
+        # Initialize wandb for standalone runs
+        try:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            wandb_run = wandb.init(
+                project="alphazero_clique", 
+                name=f"{args.experiment_name}_{timestamp}",
+                config=vars(args),
+                resume="allow",
+                id=f"pipeline_{args.experiment_name}_{timestamp}"
+            )
+            print("Weights & Biases initialized for standalone run.")
+        except Exception as e:
+            print(f"Could not initialize Weights & Biases: {e}. Skipping wandb logging.")
+            wandb_run = None
+    else:
+        # Update config for sweep runs
+        wandb.config.update(vars(args), allow_val_change=True)
+        print("Using existing wandb run (sweep mode).")
 
     # --- Load existing log data or initialize --- 
     log_data = {"hyperparameters": {}, "log": []} # Initialize with new structure
@@ -764,6 +770,9 @@ if __name__ == "__main__":
     except RuntimeError:
         print("Multiprocessing start method already set or not needed")
     
+    # Initialize wandb first for sweep support
+    wandb.init(project="alphazero_clique-src")
+    
     parser = argparse.ArgumentParser(description="AlphaZero Clique Game Pipeline")
     
     # Mode selection
@@ -820,7 +829,19 @@ if __name__ == "__main__":
     parser.add_argument("--use-policy-only", action='store_true', help="Use policy head output for move selection")
 
     args = parser.parse_args()
-
+    
+    # Override args with wandb config for sweeps
+    if hasattr(wandb.config, 'keys') and len(wandb.config.keys()) > 0:
+        print("Using wandb config for sweep parameters")
+        for key, value in wandb.config.items():
+            # Convert wandb config keys to match args attributes
+            key = key.replace('-', '_')  # Convert hyphens to underscores
+            setattr(args, key, value)
+        
+        # Set experiment name with wandb run id for uniqueness
+        args.experiment_name = f"n7k4_32_8_sweep_{wandb.run.id}"
+        print(f"Sweep experiment name: {args.experiment_name}")
+    
     # Create base directories
     data_base_dir = f"./experiments/{args.experiment_name}/datasets"
     model_dir = f"./experiments/{args.experiment_name}/models"

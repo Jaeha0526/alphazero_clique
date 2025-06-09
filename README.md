@@ -255,6 +255,7 @@ alphazero_clique/
 ├── analyze_data.py             # Data analysis utilities for training logs
 ├── policy_analysis.py          # Policy prediction analysis
 ├── action_sequence_analysis.py # Game action sequence analysis
+├── sweep_config.yaml           # Wandb sweep configuration for hyperparameter optimization
 ├── templates/
 │   └── index.html            # HTML template for the web interface
 ├── static/
@@ -294,12 +295,89 @@ Analyzes game action sequences and patterns from self-play data.
 
 ## Experiment Tracking
 
-The pipeline includes optional integration with [Weights & Biases (wandb)](https://wandb.ai/) for experiment tracking and visualization:
+The pipeline includes comprehensive integration with [Weights & Biases (wandb)](https://wandb.ai/) for experiment tracking and hyperparameter optimization.
+
+### **Basic Experiment Tracking**
 
 - Training metrics are automatically logged to wandb if available
 - Each experiment gets a unique run name with timestamp
 - All hyperparameters and results are tracked
 - If wandb is not available or fails to initialize, training continues normally with local logging only
+
+### **Hyperparameter Optimization with Wandb Sweeps**
+
+For systematic hyperparameter optimization, the pipeline supports wandb sweeps with Bayesian optimization:
+
+**1. Setup Sweep Configuration:**
+
+The repository includes `sweep_config.yaml` for optimizing training hyperparameters with a fixed 32-layer, 8-depth architecture:
+
+```yaml
+# Example sweep configuration (see sweep_config.yaml)
+method: bayes
+metric:
+  goal: minimize
+  name: validation_policy_loss
+parameters:
+  initial_lr:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.002
+  batch_size:
+    values: [16, 32, 64, 96]
+  epochs:
+    min: 10
+    max: 30
+  self_play_games:
+    min: 60
+    max: 150
+  mcts_sims:
+    values: [200, 300, 400, 600, 800]
+  skill_variation:
+    min: 0.2
+    max: 0.8
+```
+
+**2. Launch Hyperparameter Sweep:**
+
+```bash
+# Create the sweep
+wandb sweep sweep_config.yaml
+
+# Run sweep agents (use sweep ID from previous command)
+wandb agent <your-sweep-id>
+
+# For parallel optimization (recommended):
+# Terminal 1:
+wandb agent <your-sweep-id>
+# Terminal 2:
+wandb agent <your-sweep-id>
+# Terminal 3:
+wandb agent <your-sweep-id>
+```
+
+**3. Sweep Features:**
+
+- **Bayesian Optimization**: Intelligently explores hyperparameter space
+- **Early Termination**: Stops underperforming runs to save compute
+- **Parallel Execution**: Run multiple experiments simultaneously
+- **Real-time Monitoring**: Track progress and compare results in wandb dashboard
+- **Automatic Best Model Selection**: Find optimal settings for challenging scenarios like n7k4
+
+**4. Recommended Sweep Strategy:**
+
+For optimal results with limited compute:
+- **Single Agent**: Run one agent on MacBook Air M3 to avoid thermal throttling
+- **Monitor Temperature**: Keep CPU usage under 80% for sustained performance
+- **Expected Runtime**: 20-30 runs over 2-3 days to find optimal hyperparameters
+- **Target Improvement**: Achieve policy loss < 1.1 consistently
+
+**5. Interpreting Results:**
+
+The sweep optimizes for `validation_policy_loss` minimization. Key metrics to monitor:
+- **Policy Loss Convergence**: Target < 1.2 for good performance
+- **Training Stability**: Avoid value loss collapse (< 1e-6)
+- **Win Rate vs Initial**: Should improve to > 0.3 for effective learning
 
 ## License
 
