@@ -496,7 +496,9 @@ def run_pipeline(args: argparse.Namespace) -> None:
             "value_weight": args.value_weight,
             "use_policy_only": args.use_policy_only,
             "perspective_mode": args.perspective_mode,
-            "skill_variation": args.skill_variation
+            "skill_variation": args.skill_variation,
+            "early_stop_patience": args.early_stop_patience,
+            "min_iterations": args.min_iterations
         }
         # Save immediately after storing hyperparameters for a new file
         if not os.path.exists(log_file_path):
@@ -509,6 +511,25 @@ def run_pipeline(args: argparse.Namespace) -> None:
     # Determine starting iteration based on log data
     start_iteration = log_data["log"][-1]["iteration"] + 1 if log_data["log"] else 0
     print(f"Starting from iteration: {start_iteration}")
+    
+    # Early stopping parameters
+    best_validation_loss = float('inf')
+    iterations_without_improvement = 0
+    early_stop_patience = args.early_stop_patience
+    min_iterations = args.min_iterations
+    
+    print(f"Early stopping configuration:")
+    print(f"  - Patience: {early_stop_patience} iterations without improvement")
+    print(f"  - Minimum iterations: {min_iterations}")
+    print(f"  - Monitoring: validation_policy_loss")
+    
+    # Initialize best loss from existing log if available
+    if log_data["log"]:
+        existing_losses = [entry.get("validation_policy_loss") for entry in log_data["log"] 
+                         if entry.get("validation_policy_loss") is not None]
+        if existing_losses:
+            best_validation_loss = min(existing_losses)
+            print(f"Best validation policy loss from existing log: {best_validation_loss:.6f}")
     
     # Run training iterations
     for iteration in range(start_iteration, start_iteration + args.iterations):
@@ -543,6 +564,39 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     print(f"Logged iteration {iteration} metrics to Weights & Biases.")
                 except Exception as e:
                     print(f"Error logging metrics to Weights & Biases: {e}")
+            
+            # Early stopping check
+            current_validation_loss = iteration_metrics.get("validation_policy_loss")
+            if current_validation_loss is not None:
+                if current_validation_loss < best_validation_loss:
+                    best_validation_loss = current_validation_loss
+                    iterations_without_improvement = 0
+                    print(f"New best validation policy loss: {best_validation_loss:.6f}")
+                else:
+                    iterations_without_improvement += 1
+                    print(f"No improvement in validation policy loss for {iterations_without_improvement} iterations")
+                
+                # Check early stopping conditions
+                if (iteration >= min_iterations - 1 and  # -1 because iteration is 0-indexed
+                    iterations_without_improvement >= early_stop_patience):
+                    print(f"\nEarly stopping triggered!")
+                    print(f"No improvement in validation policy loss for {iterations_without_improvement} iterations")
+                    print(f"Best validation policy loss: {best_validation_loss:.6f}")
+                    print(f"Completed {iteration + 1} iterations (minimum {min_iterations} satisfied)")
+                    
+                    # Log early stopping to wandb
+                    if wandb_run:
+                        try:
+                            wandb.log({
+                                "early_stopping_triggered": True,
+                                "early_stopping_iteration": iteration + 1,
+                                "best_validation_policy_loss": best_validation_loss,
+                                "iterations_without_improvement": iterations_without_improvement
+                            }, step=iteration)
+                        except Exception as e:
+                            print(f"Error logging early stopping to Weights & Biases: {e}")
+                    
+                    break
         else:
             print(f"Iteration {iteration} did not return metrics (likely skipped). Not logging.")
             
@@ -821,6 +875,12 @@ if __name__ == "__main__":
     # Add skill variation option
     parser.add_argument("--skill-variation", type=float, default=0.0, 
                         help="Skill variation in MCTS simulation counts (0 = no variation, higher = more variation)")
+    
+    # Add early stopping parameters
+    parser.add_argument("--early-stop-patience", type=int, default=5,
+                        help="Number of iterations without improvement before early stopping")
+    parser.add_argument("--min-iterations", type=int, default=10,
+                        help="Minimum number of iterations before early stopping can be triggered")
 
     # Specific mode parameters (can add more if needed, e.g., model paths for evaluate/play)
     parser.add_argument("--iteration", type=int, default=0, help="Iteration number (for train mode)")
