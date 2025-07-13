@@ -29,13 +29,14 @@ class CliqueGameData(Dataset):
                     board_state = example['board_state']
                     policy = example['policy']
                     value = example['value']
+                    player_role = example.get('player_role', None)  # Get player role if available
                 else:
                     print(f"Skipping example: wrong format")
                     continue
                 
                 # Basic validation checks
                 if isinstance(policy, np.ndarray) and isinstance(value, (int, float, np.ndarray)):
-                    self.examples.append((board_state, policy, value))
+                    self.examples.append((board_state, policy, value, player_role))
                 else:
                     print(f"Skipping example: invalid types - policy: {type(policy)}, value: {type(value)}")
             except Exception as e:
@@ -50,7 +51,7 @@ class CliqueGameData(Dataset):
     
     def __getitem__(self, idx):
         try:
-            board_state, policy, value = self.examples[idx]
+            board_state, policy, value, player_role = self.examples[idx]
             
             # Convert board state to graph format
             edge_index, edge_attr = self._board_to_graph(board_state)
@@ -107,7 +108,8 @@ class CliqueGameData(Dataset):
                 edge_attr=edge_attr,
                 policy=policy,
                 value=value,
-                num_nodes=num_nodes
+                num_nodes=num_nodes,
+                player_role=player_role if player_role is not None else -1  # Use -1 for legacy data
             )
         except Exception as e:
             print(f"Error getting item {idx}: {e}")
@@ -123,7 +125,8 @@ class CliqueGameData(Dataset):
                 edge_attr=edge_attr,
                 policy=policy,
                 value=value,
-                num_nodes=num_nodes
+                num_nodes=num_nodes,
+                player_role=-1  # Fallback case
             )
     
     def _board_to_graph(self, board_state):
@@ -386,9 +389,10 @@ class EnhancedPolicyHead(nn.Module):
 
 
 class CliqueGNN(nn.Module):
-    def __init__(self, num_vertices=6, hidden_dim=64, num_layers=2):
+    def __init__(self, num_vertices=6, hidden_dim=64, num_layers=2, asymmetric_mode=False):
         super().__init__()
         self.hidden_dim = hidden_dim
+        self.asymmetric_mode = asymmetric_mode
         
         # Input embedding layers with initialization
         self.node_embedding = nn.Linear(1, hidden_dim)  # Assuming node features are just indices initially
@@ -406,22 +410,50 @@ class CliqueGNN(nn.Module):
             self.node_layers.append(EdgeAwareGNNBlock(hidden_dim, hidden_dim, hidden_dim))
             self.edge_layers.append(EdgeBlock(hidden_dim, hidden_dim, hidden_dim))
         
-        # Simpler policy head with properly initialized weights
-        self.policy_head = nn.Sequential(
-            nn.Linear(hidden_dim, 2*hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2),  # Add dropout to prevent overfitting
-            nn.Linear(2*hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
-        
-        # Initialize policy head weights
-        for m in self.policy_head.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+        # Policy head(s) creation based on mode
+        if self.asymmetric_mode:
+            # Dual policy heads for asymmetric mode
+            self.attacker_policy_head = nn.Sequential(
+                nn.Linear(hidden_dim, 2*hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(2*hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, 1)
+            )
+            self.defender_policy_head = nn.Sequential(
+                nn.Linear(hidden_dim, 2*hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(2*hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, 1)
+            )
+            
+            # Initialize both policy heads
+            for head in [self.attacker_policy_head, self.defender_policy_head]:
+                for m in head.modules():
+                    if isinstance(m, nn.Linear):
+                        nn.init.xavier_uniform_(m.weight)
+                        if m.bias is not None:
+                            nn.init.zeros_(m.bias)
+        else:
+            # Single policy head for symmetric mode (EXISTING BEHAVIOR)
+            self.policy_head = nn.Sequential(
+                nn.Linear(hidden_dim, 2*hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.2),  # Add dropout to prevent overfitting
+                nn.Linear(2*hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, 1)
+            )
+            
+            # Initialize policy head weights
+            for m in self.policy_head.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.xavier_uniform_(m.weight)
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
         
         # Global attention pooling for nodes
         self.node_attention = nn.Sequential(
@@ -461,7 +493,7 @@ class CliqueGNN(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
     
-    def forward(self, edge_index, edge_attr, batch=None, debug=False):
+    def forward(self, edge_index, edge_attr, batch=None, debug=False, player_role=None):
         # If no batch assignment is provided, assume single graph
         if batch is None:
             batch = torch.zeros(edge_index.max().item() + 1, dtype=torch.long, device=edge_index.device)
@@ -497,8 +529,19 @@ class CliqueGNN(nn.Module):
             if debug:
                 print(f"[DEBUG] After layer {i} - Edge features shape: {edge_features.shape}")
         
-        # Generate edge scores directly for undirected edges
-        edge_scores = self.policy_head(edge_features)
+        # Generate edge scores based on mode and player role
+        if self.asymmetric_mode:
+            # Asymmetric mode: select appropriate policy head based on player role
+            if player_role == 0 or player_role == 'attacker':
+                edge_scores = self.attacker_policy_head(edge_features)
+            elif player_role == 1 or player_role == 'defender':
+                edge_scores = self.defender_policy_head(edge_features)
+            else:
+                # If no role specified in asymmetric mode, default to attacker for backward compatibility
+                edge_scores = self.attacker_policy_head(edge_features)
+        else:
+            # Symmetric mode: use single policy head (EXISTING BEHAVIOR)
+            edge_scores = self.policy_head(edge_features)
         
         if debug:
             print(f"[DEBUG] Edge scores shape: {edge_scores.shape}")
@@ -650,6 +693,11 @@ class CliqueGNN(nn.Module):
         # Performance tracking
         policy_loss_sum = 0.0
         value_loss_sum = 0.0
+        # Track separate policy losses for asymmetric mode
+        attacker_policy_loss_sum = 0.0
+        defender_policy_loss_sum = 0.0
+        attacker_examples_count = 0
+        defender_examples_count = 0
         
         for batch_data in train_loader:
             if step >= num_iterations:

@@ -88,7 +88,12 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
                 edge_attr = state_dict['edge_attr'].to(device)
                 
                 with torch.no_grad():
-                    policy_output, _ = model_to_use(edge_index, edge_attr)
+                    # Pass player role for asymmetric models
+                    if hasattr(model_to_use, 'asymmetric_mode') and model_to_use.asymmetric_mode:
+                        player_role = board.player  # 0 for attacker (Player 1), 1 for defender (Player 2)
+                        policy_output, _ = model_to_use(edge_index, edge_attr, player_role=player_role)
+                    else:
+                        policy_output, _ = model_to_use(edge_index, edge_attr)
                 
                 policy_output = policy_output.squeeze().cpu().numpy()
                 
@@ -172,9 +177,164 @@ def evaluate_models(current_model: CliqueGNN, best_model: CliqueGNN,
         win_rate = current_model_wins / total_games
         print(f"Evaluation complete: Current model wins: {current_model_wins}, "
               f"Best model wins: {best_model_wins}, Draws: {draws}")
-        print(f"Current model win rate (all games): {win_rate:.4f}")
+        if game_mode == "asymmetric":
+            print(f"Current model win rate (all games): {win_rate:.4f}")
+            print(f"  Note: In asymmetric mode, win rate reflects performance across both roles:")
+            print(f"        - As attacker: How often current model forms cliques")
+            print(f"        - As defender: How often current model prevents cliques")
+        else:
+            print(f"Current model win rate (all games): {win_rate:.4f}")
     
     return win_rate
+
+def evaluate_models_asymmetric(current_model: CliqueGNN, other_model: CliqueGNN,
+                              num_games: int = 20, num_vertices: int = 6, clique_size: int = 3,
+                              num_mcts_sims: int = 100, perspective_mode: str = "alternating",
+                              use_policy_only: bool = False, 
+                              decided_games_only: bool = False) -> Dict[str, float]:
+    """
+    Evaluate asymmetric models with role-specific win rates.
+    
+    Returns:
+        Dictionary with keys:
+        - 'attacker_win_rate': How often current model (as attacker) beats other model (as defender)
+        - 'defender_win_rate': How often current model (as defender) beats other model (as attacker)
+    """
+    current_model.eval()
+    other_model.eval()
+    
+    # Set device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    current_model.to(device)
+    other_model.to(device)
+    
+    results = {}
+    
+    # Test 1: Current model as attacker vs other model as defender
+    print(f"Evaluating: Current model (attacker) vs Other model (defender)")
+    attacker_wins = 0
+    defender_wins = 0
+    draws = 0
+    
+    for game_idx in range(num_games):
+        # Initialize game
+        board = CliqueBoard(num_vertices, clique_size, "asymmetric")
+        game_over = False
+        max_moves = num_vertices * (num_vertices - 1) // 2
+        
+        while not game_over and board.move_count < max_moves:
+            # Current model always plays as Player 1 (attacker), other model as Player 2 (defender)
+            model_to_use = current_model if board.player == 0 else other_model
+            
+            if use_policy_only:
+                # Get move from policy head directly
+                state_dict = ed.prepare_state_for_network(board)
+                edge_index = state_dict['edge_index'].to(device)
+                edge_attr = state_dict['edge_attr'].to(device)
+                
+                with torch.no_grad():
+                    player_role = board.player
+                    policy_output, _ = model_to_use(edge_index, edge_attr, player_role=player_role)
+                
+                policy_output = policy_output.squeeze().cpu().numpy()
+                valid_moves_mask = ed.get_valid_moves_mask(board)
+                masked_policy = policy_output * valid_moves_mask
+                
+                if masked_policy.sum() > 1e-8:
+                    best_move = np.argmax(masked_policy)
+                else:
+                    valid_moves = board.get_valid_moves()
+                    best_move = np.random.choice(valid_moves) if valid_moves else 0
+            else:
+                # Use MCTS
+                best_move, _ = UCT_search(board, num_mcts_sims, model_to_use, 
+                                        perspective_mode=perspective_mode)
+            
+            # Make the move
+            board = make_move_on_board(board, best_move)
+            game_over = board.game_state != 0
+        
+        # Record result
+        if board.game_state == 1:  # Player 1 (Attacker) wins
+            attacker_wins += 1
+        elif board.game_state == 2:  # Player 2 (Defender) wins
+            defender_wins += 1
+        else:  # Draw (game_state == 3) or unfinished (game_state == 0)
+            draws += 1
+    
+    # Calculate attacker win rate
+    if decided_games_only:
+        decided_games = attacker_wins + defender_wins
+        results['attacker_win_rate'] = attacker_wins / decided_games if decided_games > 0 else 0.5
+    else:
+        results['attacker_win_rate'] = attacker_wins / num_games
+    
+    print(f"  Attacker wins: {attacker_wins}, Defender wins: {defender_wins}, Draws: {draws}")
+    print(f"  Current model (attacker) win rate: {results['attacker_win_rate']:.4f}")
+    
+    # Test 2: Current model as defender vs other model as attacker
+    print(f"Evaluating: Current model (defender) vs Other model (attacker)")
+    attacker_wins = 0
+    defender_wins = 0
+    draws = 0
+    
+    for game_idx in range(num_games):
+        # Initialize game
+        board = CliqueBoard(num_vertices, clique_size, "asymmetric")
+        game_over = False
+        max_moves = num_vertices * (num_vertices - 1) // 2
+        
+        while not game_over and board.move_count < max_moves:
+            # Other model always plays as Player 1 (attacker), current model as Player 2 (defender)
+            model_to_use = other_model if board.player == 0 else current_model
+            
+            if use_policy_only:
+                # Get move from policy head directly
+                state_dict = ed.prepare_state_for_network(board)
+                edge_index = state_dict['edge_index'].to(device)
+                edge_attr = state_dict['edge_attr'].to(device)
+                
+                with torch.no_grad():
+                    player_role = board.player
+                    policy_output, _ = model_to_use(edge_index, edge_attr, player_role=player_role)
+                
+                policy_output = policy_output.squeeze().cpu().numpy()
+                valid_moves_mask = ed.get_valid_moves_mask(board)
+                masked_policy = policy_output * valid_moves_mask
+                
+                if masked_policy.sum() > 1e-8:
+                    best_move = np.argmax(masked_policy)
+                else:
+                    valid_moves = board.get_valid_moves()
+                    best_move = np.random.choice(valid_moves) if valid_moves else 0
+            else:
+                # Use MCTS
+                best_move, _ = UCT_search(board, num_mcts_sims, model_to_use, 
+                                        perspective_mode=perspective_mode)
+            
+            # Make the move
+            board = make_move_on_board(board, best_move)
+            game_over = board.game_state != 0
+        
+        # Record result
+        if board.game_state == 1:  # Player 1 (Other model as Attacker) wins
+            attacker_wins += 1
+        elif board.game_state == 2:  # Player 2 (Current model as Defender) wins
+            defender_wins += 1
+        else:  # Draw (game_state == 3) or unfinished (game_state == 0)
+            draws += 1
+    
+    # Calculate defender win rate
+    if decided_games_only:
+        decided_games = attacker_wins + defender_wins
+        results['defender_win_rate'] = defender_wins / decided_games if decided_games > 0 else 0.5
+    else:
+        results['defender_win_rate'] = defender_wins / num_games
+    
+    print(f"  Attacker wins: {attacker_wins}, Defender wins: {defender_wins}, Draws: {draws}")
+    print(f"  Current model (defender) win rate: {results['defender_win_rate']:.4f}")
+    
+    return results
 
 def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model_dir: str) -> Dict[str, float]:
     """Run one iteration of the AlphaZero pipeline, return metrics."""
@@ -210,13 +370,15 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
     else:
         print("No previous or best model found. Using fresh model for self-play.")
         # Need to create and save an initial model if none exists
-        initial_model = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers)
+        asymmetric_mode = (game_mode == "asymmetric")
+        initial_model = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers, asymmetric_mode=asymmetric_mode)
         save_initial = {
             'state_dict': initial_model.state_dict(),
             'num_vertices': num_vertices,
             'clique_size': clique_size,
             'hidden_dim': hidden_dim,
-            'num_layers': num_layers
+            'num_layers': num_layers,
+            'asymmetric_mode': asymmetric_mode
         }
         torch.save(save_initial, current_model_path) # Save as iter 0
         model_to_load_path = current_model_path
@@ -226,7 +388,9 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
     checkpoint_selfplay = torch.load(model_to_load_path, map_location=torch.device('cpu'))
     # Verify loaded params match config - optional but recommended
     # ... (add checks comparing checkpoint params with args: num_vertices, clique_size, hidden_dim, num_layers)
-    model_for_self_play = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers)
+    # Use asymmetric_mode from saved checkpoint if available, otherwise infer from game_mode
+    saved_asymmetric_mode = checkpoint_selfplay.get('asymmetric_mode', game_mode == "asymmetric")
+    model_for_self_play = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers, asymmetric_mode=saved_asymmetric_mode)
     model_for_self_play.load_state_dict(checkpoint_selfplay['state_dict'])
     model_for_self_play.cpu() # Ensure on CPU before sharing
     model_for_self_play.share_memory()
@@ -274,8 +438,16 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
     print("Starting training process...")
     # train_network will load the previous model (iter N-1 or best) internally based on iteration number
     # and save the result as iter N.
-    avg_policy_loss, avg_value_loss = train_network(all_examples, iteration, num_vertices, clique_size, model_dir, args)
-    print(f"Training process finished. Val Policy Loss: {avg_policy_loss:.4f}, Val Value Loss: {avg_value_loss:.4f}")
+    # Handle both symmetric and asymmetric return formats
+    train_result = train_network(all_examples, iteration, num_vertices, clique_size, model_dir, args)
+    if len(train_result) == 4:  # Asymmetric mode
+        avg_policy_loss, avg_value_loss, avg_attacker_loss, avg_defender_loss = train_result
+        print(f"Training process finished. Val Policy Loss: {avg_policy_loss:.4f}, Val Value Loss: {avg_value_loss:.4f}")
+        print(f"  Attacker Policy Loss: {avg_attacker_loss:.4f}, Defender Policy Loss: {avg_defender_loss:.4f}")
+    else:  # Symmetric mode
+        avg_policy_loss, avg_value_loss = train_result
+        avg_attacker_loss, avg_defender_loss = None, None
+        print(f"Training process finished. Val Policy Loss: {avg_policy_loss:.4f}, Val Value Loss: {avg_value_loss:.4f}")
     
     # --- Remove Save After Training --- 
     # current_model = current_model.cpu() # No single 'current_model' instance used throughout
@@ -288,7 +460,9 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
         return
     checkpoint_eval = torch.load(current_model_path, map_location=eval_device)
     # Optional: Verify params in checkpoint_eval match args
-    trained_model = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers).to(eval_device)
+    # Use asymmetric_mode from saved checkpoint if available, otherwise infer from game_mode
+    saved_asymmetric_mode = checkpoint_eval.get('asymmetric_mode', game_mode == "asymmetric")
+    trained_model = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers, asymmetric_mode=saved_asymmetric_mode).to(eval_device)
     trained_model.load_state_dict(checkpoint_eval['state_dict'])
     trained_model.eval()
     print("Loaded trained model.")
@@ -301,6 +475,8 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
     if not os.path.exists(best_model_path):
          print("No best model found. Current model will become the best model.")
          win_rate_vs_best = 1.0 # Treat as 100% win rate if no opponent
+         attacker_win_rate_vs_best = None
+         defender_win_rate_vs_best = None
     else:
         print(f"Loading best model for comparison: {best_model_path}")
         checkpoint_best = torch.load(best_model_path, map_location=eval_device)
@@ -309,25 +485,50 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
            checkpoint_best.get('clique_size') != clique_size:
              print("ERROR: Best model configuration does not match current settings. Skipping evaluation.")
              win_rate_vs_best = -1.0 # Indicate configuration mismatch
+             attacker_win_rate_vs_best = None
+             defender_win_rate_vs_best = None
         else:
             best_hidden = checkpoint_best.get('hidden_dim', hidden_dim)
             best_layers = checkpoint_best.get('num_layers', num_layers)
-            best_model_instance = CliqueGNN(num_vertices, hidden_dim=best_hidden, num_layers=best_layers).to(eval_device)
+            asymmetric_mode = (game_mode == "asymmetric")
+            best_model_instance = CliqueGNN(num_vertices, hidden_dim=best_hidden, num_layers=best_layers, asymmetric_mode=asymmetric_mode).to(eval_device)
             best_model_instance.load_state_dict(checkpoint_best['state_dict'])
             best_model_instance.eval()
             
             # Run evaluation games (decided games only for best model update)
-            win_rate_vs_best = evaluate_models(trained_model, best_model_instance, 
-                                       num_games=args.num_games, # Use num_games from args
-                                       num_vertices=num_vertices, clique_size=clique_size,
-                                       num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode,
-                                       perspective_mode=args.perspective_mode,
-                                       use_policy_only=args.use_policy_only,
-                                       decided_games_only=True)
+            if game_mode == "asymmetric":
+                # Use role-specific evaluation for asymmetric mode
+                role_results = evaluate_models_asymmetric(trained_model, best_model_instance,
+                                                        num_games=args.num_games // 2,  # Half games per role
+                                                        num_vertices=num_vertices, clique_size=clique_size,
+                                                        num_mcts_sims=args.eval_mcts_sims,
+                                                        perspective_mode=args.perspective_mode,
+                                                        use_policy_only=args.use_policy_only,
+                                                        decided_games_only=True)
+                # Overall win rate for model selection (average of both roles)
+                win_rate_vs_best = (role_results['attacker_win_rate'] + role_results['defender_win_rate']) / 2
+                attacker_win_rate_vs_best = role_results['attacker_win_rate']
+                defender_win_rate_vs_best = role_results['defender_win_rate']
+            else:
+                # Use standard evaluation for symmetric mode
+                win_rate_vs_best = evaluate_models(trained_model, best_model_instance, 
+                                           num_games=args.num_games, # Use num_games from args
+                                           num_vertices=num_vertices, clique_size=clique_size,
+                                           num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode,
+                                           perspective_mode=args.perspective_mode,
+                                           use_policy_only=args.use_policy_only,
+                                           decided_games_only=True)
+                attacker_win_rate_vs_best = None
+                defender_win_rate_vs_best = None
 
     # --- 6b. Evaluate Trained vs Initial --- 
     print("Starting evaluation against initial model (iter0)...")
     win_rate_vs_initial = -2.0 # Default: not evaluated
+    win_rate_vs_initial_mcts_1 = -2.0 # Default: not evaluated
+    attacker_win_rate_vs_initial = None
+    defender_win_rate_vs_initial = None
+    attacker_win_rate_vs_initial_mcts_1 = None
+    defender_win_rate_vs_initial_mcts_1 = None
     initial_model_path = f"{model_dir}/clique_net_iter0.pth.tar"
     
     if not os.path.exists(initial_model_path):
@@ -340,34 +541,68 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
                checkpoint_initial.get('clique_size') != clique_size:
                  print("ERROR: Initial model configuration does not match current settings. Skipping evaluation against initial.")
                  win_rate_vs_initial = -1.0 # Indicate configuration mismatch
+                 win_rate_vs_initial_mcts_1 = -1.0 # Indicate configuration mismatch
             else:
                 initial_hidden = checkpoint_initial.get('hidden_dim', hidden_dim)
                 initial_layers = checkpoint_initial.get('num_layers', num_layers)
-                initial_model = CliqueGNN(num_vertices, hidden_dim=initial_hidden, num_layers=initial_layers).to(eval_device)
+                asymmetric_mode = (game_mode == "asymmetric")
+                initial_model = CliqueGNN(num_vertices, hidden_dim=initial_hidden, num_layers=initial_layers, asymmetric_mode=asymmetric_mode).to(eval_device)
                 initial_model.load_state_dict(checkpoint_initial['state_dict'])
                 initial_model.eval()
                 print("Loaded initial model for comparison.")
                 
                 # Run evaluation games (trained vs initial) - include draws as losses
-                win_rate_vs_initial = evaluate_models(trained_model, initial_model, 
-                                           num_games=args.num_games, # Use num_games from args
-                                           num_vertices=num_vertices, clique_size=clique_size,
-                                           num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode,
-                                           perspective_mode=args.perspective_mode,
-                                           use_policy_only=args.use_policy_only,
-                                           decided_games_only=False)
-                
-                win_rate_vs_initial_mcts_1 = evaluate_models(trained_model, initial_model, 
-                                           num_games=101, # Use num_games from args
-                                           num_vertices=num_vertices, clique_size=clique_size,
-                                           num_mcts_sims=1, game_mode=game_mode,
-                                           perspective_mode=args.perspective_mode,
-                                           use_policy_only=True,
-                                           decided_games_only=False)
+                if game_mode == "asymmetric":
+                    # Use role-specific evaluation for asymmetric mode
+                    initial_role_results = evaluate_models_asymmetric(trained_model, initial_model,
+                                                                    num_games=args.num_games // 2,  # Half games per role
+                                                                    num_vertices=num_vertices, clique_size=clique_size,
+                                                                    num_mcts_sims=args.eval_mcts_sims,
+                                                                    perspective_mode=args.perspective_mode,
+                                                                    use_policy_only=args.use_policy_only,
+                                                                    decided_games_only=False)
+                    # Overall win rate (average of both roles)
+                    win_rate_vs_initial = (initial_role_results['attacker_win_rate'] + initial_role_results['defender_win_rate']) / 2
+                    attacker_win_rate_vs_initial = initial_role_results['attacker_win_rate']
+                    defender_win_rate_vs_initial = initial_role_results['defender_win_rate']
+                    
+                    # MCTS=1 evaluation
+                    initial_mcts1_results = evaluate_models_asymmetric(trained_model, initial_model,
+                                                                     num_games=50,  # Half of 101 games per role
+                                                                     num_vertices=num_vertices, clique_size=clique_size,
+                                                                     num_mcts_sims=1,
+                                                                     perspective_mode=args.perspective_mode,
+                                                                     use_policy_only=True,
+                                                                     decided_games_only=False)
+                    win_rate_vs_initial_mcts_1 = (initial_mcts1_results['attacker_win_rate'] + initial_mcts1_results['defender_win_rate']) / 2
+                    attacker_win_rate_vs_initial_mcts_1 = initial_mcts1_results['attacker_win_rate']
+                    defender_win_rate_vs_initial_mcts_1 = initial_mcts1_results['defender_win_rate']
+                else:
+                    # Use standard evaluation for symmetric mode
+                    win_rate_vs_initial = evaluate_models(trained_model, initial_model, 
+                                               num_games=args.num_games, # Use num_games from args
+                                               num_vertices=num_vertices, clique_size=clique_size,
+                                               num_mcts_sims=args.eval_mcts_sims, game_mode=game_mode,
+                                               perspective_mode=args.perspective_mode,
+                                               use_policy_only=args.use_policy_only,
+                                               decided_games_only=False)
+                    
+                    win_rate_vs_initial_mcts_1 = evaluate_models(trained_model, initial_model, 
+                                               num_games=101, # Use num_games from args
+                                               num_vertices=num_vertices, clique_size=clique_size,
+                                               num_mcts_sims=1, game_mode=game_mode,
+                                               perspective_mode=args.perspective_mode,
+                                               use_policy_only=True,
+                                               decided_games_only=False)
+                    attacker_win_rate_vs_initial = None
+                    defender_win_rate_vs_initial = None
+                    attacker_win_rate_vs_initial_mcts_1 = None
+                    defender_win_rate_vs_initial_mcts_1 = None
                 
         except Exception as e:
             print(f"ERROR loading or evaluating against initial model: {e}")
             win_rate_vs_initial = -3.0 # Indicate other error
+            win_rate_vs_initial_mcts_1 = -3.0 # Indicate other error
 
     # --- 7. Update Best Model (based on win_rate_vs_best) --- 
     if win_rate_vs_best > eval_threshold:
@@ -378,7 +613,8 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
             'num_vertices': num_vertices,
             'clique_size': clique_size,
             'hidden_dim': hidden_dim,
-            'num_layers': num_layers
+            'num_layers': num_layers,
+            'asymmetric_mode': asymmetric_mode
         }
         torch.save(save_best, best_model_path)
     else:
@@ -387,7 +623,7 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
     print(f"=== Iteration {iteration} finished ===")
     
     # Return collected metrics
-    return {
+    metrics = {
         "iteration": iteration,
         "validation_policy_loss": avg_policy_loss,
         "validation_value_loss": avg_value_loss,
@@ -395,6 +631,26 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
         "evaluation_win_rate_vs_initial": win_rate_vs_initial,
         "evaluation_win_rate_vs_initial_mcts_1": win_rate_vs_initial_mcts_1
     }
+    
+    # Add separate policy losses for asymmetric mode
+    if avg_attacker_loss is not None and avg_defender_loss is not None:
+        metrics["validation_attacker_policy_loss"] = avg_attacker_loss
+        metrics["validation_defender_policy_loss"] = avg_defender_loss
+    
+    # Add role-specific win rates for asymmetric mode
+    if attacker_win_rate_vs_best is not None:
+        metrics["evaluation_attacker_win_rate_vs_best"] = attacker_win_rate_vs_best
+        metrics["evaluation_defender_win_rate_vs_best"] = defender_win_rate_vs_best
+    
+    if attacker_win_rate_vs_initial is not None:
+        metrics["evaluation_attacker_win_rate_vs_initial"] = attacker_win_rate_vs_initial
+        metrics["evaluation_defender_win_rate_vs_initial"] = defender_win_rate_vs_initial
+        
+    if attacker_win_rate_vs_initial_mcts_1 is not None:
+        metrics["evaluation_attacker_win_rate_vs_initial_mcts_1"] = attacker_win_rate_vs_initial_mcts_1
+        metrics["evaluation_defender_win_rate_vs_initial_mcts_1"] = defender_win_rate_vs_initial_mcts_1
+    
+    return metrics
 
 def run_pipeline(args: argparse.Namespace) -> None:
     """
@@ -643,62 +899,166 @@ def plot_learning_curve(log_file_path: str):
         print("Not enough data points in log file to plot learning curve.")
         return
 
-    # Extract data from the log_list
-    plot_data = [
-        (entry["iteration"], entry["validation_policy_loss"], entry["validation_value_loss"], entry.get("evaluation_win_rate_vs_initial"))
-        for entry in log_list
-        if entry.get("validation_policy_loss") is not None and entry.get("validation_value_loss") is not None
-    ]
+    # Check if this is an asymmetric experiment
+    has_asymmetric_data = any(entry.get("validation_attacker_policy_loss") is not None for entry in log_list)
     
-    # Separate into lists, handling None for win_rate_initial if missing
-    iterations = [p[0] for p in plot_data]
-    policy_losses = [p[1] for p in plot_data]
-    value_losses = [p[2] for p in plot_data]
-    win_rates_initial = [p[3] if p[3] is not None and p[3] >= 0 else np.nan for p in plot_data] # Replace errors/missing with NaN
+    if has_asymmetric_data:
+        # Extract asymmetric data with all role-specific metrics
+        plot_data = [
+            (entry["iteration"], 
+             entry["validation_policy_loss"], 
+             entry["validation_value_loss"], 
+             entry.get("evaluation_win_rate_vs_initial"),
+             entry.get("validation_attacker_policy_loss"),
+             entry.get("validation_defender_policy_loss"),
+             entry.get("evaluation_attacker_win_rate_vs_initial"),
+             entry.get("evaluation_defender_win_rate_vs_initial"),
+             entry.get("evaluation_attacker_win_rate_vs_best"),
+             entry.get("evaluation_defender_win_rate_vs_best"))
+            for entry in log_list
+            if entry.get("validation_policy_loss") is not None and entry.get("validation_value_loss") is not None
+        ]
+        
+        # Separate into lists for asymmetric mode
+        iterations = [p[0] for p in plot_data]
+        policy_losses = [p[1] for p in plot_data]
+        value_losses = [p[2] for p in plot_data]
+        win_rates_initial = [p[3] if p[3] is not None and p[3] >= 0 else np.nan for p in plot_data]
+        attacker_policy_losses = [p[4] if p[4] is not None else np.nan for p in plot_data]
+        defender_policy_losses = [p[5] if p[5] is not None else np.nan for p in plot_data]
+        attacker_win_rates_initial = [p[6] if p[6] is not None and p[6] >= 0 else np.nan for p in plot_data]
+        defender_win_rates_initial = [p[7] if p[7] is not None and p[7] >= 0 else np.nan for p in plot_data]
+        attacker_win_rates_best = [p[8] if p[8] is not None and p[8] >= 0 else np.nan for p in plot_data]
+        defender_win_rates_best = [p[9] if p[9] is not None and p[9] >= 0 else np.nan for p in plot_data]
+    else:
+        # Extract data for symmetric mode (original behavior)
+        plot_data = [
+            (entry["iteration"], entry["validation_policy_loss"], entry["validation_value_loss"], entry.get("evaluation_win_rate_vs_initial"))
+            for entry in log_list
+            if entry.get("validation_policy_loss") is not None and entry.get("validation_value_loss") is not None
+        ]
+        
+        # Separate into lists, handling None for win_rate_initial if missing
+        iterations = [p[0] for p in plot_data]
+        policy_losses = [p[1] for p in plot_data]
+        value_losses = [p[2] for p in plot_data]
+        win_rates_initial = [p[3] if p[3] is not None and p[3] >= 0 else np.nan for p in plot_data]
 
     if len(iterations) < 2:
         print("Not enough valid data points (with losses) in log file to plot learning curve.")
         return
         
     # --- Plotting --- 
-    # Use 3 axes now: one for iterations, one for losses, one for win rate
-    fig, ax1 = plt.subplots(figsize=(12, 8)) # Slightly larger figure
+    if has_asymmetric_data:
+        # Create comprehensive asymmetric plots with 2x3 subplots
+        fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(2, 3, figsize=(18, 12))
+        
+        # Plot 1: Policy Losses Comparison
+        ax1.plot(iterations, policy_losses, 'k-', marker='o', linewidth=2, markersize=4, label='Combined Policy Loss')
+        ax1.plot(iterations, attacker_policy_losses, 'r-', marker='s', linewidth=2, markersize=4, label='Attacker Policy Loss')
+        ax1.plot(iterations, defender_policy_losses, 'b-', marker='^', linewidth=2, markersize=4, label='Defender Policy Loss')
+        ax1.set_xlabel('Iteration')
+        ax1.set_ylabel('Validation Policy Loss')
+        ax1.set_title('Policy Losses: Combined vs Role-Specific')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: Value Loss
+        ax2.plot(iterations, value_losses, 'g-', marker='o', linewidth=2, markersize=4, label='Value Loss')
+        ax2.set_xlabel('Iteration')
+        ax2.set_ylabel('Validation Value Loss')
+        ax2.set_title('Value Loss (Shared Head)')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        # Plot 3: Win Rates vs Initial
+        ax3.plot(iterations, win_rates_initial, 'k:', marker='o', linewidth=2, markersize=4, label='Combined Win Rate')
+        ax3.plot(iterations, attacker_win_rates_initial, 'r-', marker='s', linewidth=2, markersize=4, label='Attacker Win Rate')
+        ax3.plot(iterations, defender_win_rates_initial, 'b-', marker='^', linewidth=2, markersize=4, label='Defender Win Rate')
+        ax3.set_xlabel('Iteration')
+        ax3.set_ylabel('Win Rate vs Initial')
+        ax3.set_title('Performance vs Initial Model')
+        ax3.set_ylim(-0.05, 1.05)
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # Plot 4: Win Rates vs Best
+        ax4.plot(iterations, attacker_win_rates_best, 'r-', marker='s', linewidth=2, markersize=4, label='Attacker vs Best Defender')
+        ax4.plot(iterations, defender_win_rates_best, 'b-', marker='^', linewidth=2, markersize=4, label='Defender vs Best Attacker')
+        ax4.set_xlabel('Iteration')
+        ax4.set_ylabel('Win Rate vs Best')
+        ax4.set_title('Performance vs Best Model')
+        ax4.set_ylim(-0.05, 1.05)
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+        
+        # Plot 5: Policy Loss Difference
+        policy_diff = [a - d if not (np.isnan(a) or np.isnan(d)) else np.nan 
+                      for a, d in zip(attacker_policy_losses, defender_policy_losses)]
+        ax5.plot(iterations, policy_diff, 'purple', marker='o', linewidth=2, markersize=4, label='Attacker - Defender Loss')
+        ax5.axhline(y=0, color='gray', linestyle='--', alpha=0.7)
+        ax5.set_xlabel('Iteration')
+        ax5.set_ylabel('Policy Loss Difference')
+        ax5.set_title('Learning Balance (Attacker - Defender Loss)')
+        ax5.legend()
+        ax5.grid(True, alpha=0.3)
+        
+        # Plot 6: Win Rate Difference vs Initial
+        win_diff = [a - d if not (np.isnan(a) or np.isnan(d)) else np.nan 
+                   for a, d in zip(attacker_win_rates_initial, defender_win_rates_initial)]
+        ax6.plot(iterations, win_diff, 'orange', marker='o', linewidth=2, markersize=4, label='Attacker - Defender Win Rate')
+        ax6.axhline(y=0, color='gray', linestyle='--', alpha=0.7)
+        ax6.set_xlabel('Iteration')
+        ax6.set_ylabel('Win Rate Difference')
+        ax6.set_title('Performance Balance (Attacker - Defender)')
+        ax6.set_ylim(-1.05, 1.05)
+        ax6.legend()
+        ax6.grid(True, alpha=0.3)
+        
+        # Add overall title
+        title = f"Asymmetric Training Analysis - {hyperparams.get('experiment_name', 'N/A')}\n"
+        title += f"V={hyperparams.get('vertices', '?')}, k={hyperparams.get('k', '?')}, MCTS={hyperparams.get('mcts_sims', '?')}, "
+        title += f"LR={hyperparams.get('initial_lr', '?')}"
+        fig.suptitle(title, fontsize=14)
+        fig.tight_layout(rect=[0, 0.03, 1, 0.96])
+        
+    else:
+        # Original symmetric mode plotting (3 axes)
+        fig, ax1 = plt.subplots(figsize=(12, 8))
 
-    # Plot Policy Loss (Axis 1)
-    color = 'tab:red'
-    ax1.set_xlabel('Iteration', fontsize=14)
-    ax1.set_ylabel('Validation Policy Loss', color=color, fontsize=14)
-    ax1.plot(iterations, policy_losses, color=color, marker='o', linestyle='-', linewidth=2, markersize=5, label='Policy Loss')
-    ax1.tick_params(axis='y', labelcolor=color)
-    ax1.grid(True, axis='y', linestyle='--', alpha=0.6)
-    ax1.legend(loc='upper left')
+        # Plot Policy Loss (Axis 1)
+        color = 'tab:red'
+        ax1.set_xlabel('Iteration', fontsize=14)
+        ax1.set_ylabel('Validation Policy Loss', color=color, fontsize=14)
+        ax1.plot(iterations, policy_losses, color=color, marker='o', linestyle='-', linewidth=2, markersize=5, label='Policy Loss')
+        ax1.tick_params(axis='y', labelcolor=color)
+        ax1.grid(True, axis='y', linestyle='--', alpha=0.6)
+        ax1.legend(loc='upper left')
 
-    # Create a second y-axis for Value Loss (Axis 2)
-    ax2 = ax1.twinx()
-    color = 'tab:blue'
-    ax2.set_ylabel('Validation Value Loss', color=color, fontsize=14)
-    ax2.plot(iterations, value_losses, color=color, marker='s', linestyle='--', linewidth=2, markersize=5, label='Value Loss')
-    ax2.tick_params(axis='y', labelcolor=color)
-    ax2.legend(loc='upper right')
-    
-    # Create a third y-axis for Win Rate vs Initial (Axis 3)
-    # Need to shift this axis slightly to avoid overlap with ax2
-    ax3 = ax1.twinx()
-    ax3.spines['right'].set_position(('outward', 60)) # Offset the right spine
-    color = 'tab:green'
-    ax3.set_ylabel('Win Rate vs Initial', color=color, fontsize=14)
-    # Connect only non-NaN points for the win rate
-    ax3.plot(iterations, win_rates_initial, color=color, marker='^', linestyle=':', linewidth=2, markersize=6, label='Win Rate vs Initial')
-    ax3.tick_params(axis='y', labelcolor=color)
-    ax3.set_ylim(-0.05, 1.05) # Set y-limit for win rate
-    ax3.legend(loc='lower left')
+        # Create a second y-axis for Value Loss (Axis 2)
+        ax2 = ax1.twinx()
+        color = 'tab:blue'
+        ax2.set_ylabel('Validation Value Loss', color=color, fontsize=14)
+        ax2.plot(iterations, value_losses, color=color, marker='s', linestyle='--', linewidth=2, markersize=5, label='Value Loss')
+        ax2.tick_params(axis='y', labelcolor=color)
+        ax2.legend(loc='upper right')
+        
+        # Create a third y-axis for Win Rate vs Initial (Axis 3)
+        ax3 = ax1.twinx()
+        ax3.spines['right'].set_position(('outward', 60))
+        color = 'tab:green'
+        ax3.set_ylabel('Win Rate vs Initial', color=color, fontsize=14)
+        ax3.plot(iterations, win_rates_initial, color=color, marker='^', linestyle=':', linewidth=2, markersize=6, label='Win Rate vs Initial')
+        ax3.tick_params(axis='y', labelcolor=color)
+        ax3.set_ylim(-0.05, 1.05)
+        ax3.legend(loc='lower left')
 
-    # Add title with some hyperparameters
-    title = f"Training Losses & Win Rate vs Initial\n"
-    title += f"Exp: {hyperparams.get('experiment_name', 'N/A')}, V={hyperparams.get('vertices', '?')}, k={hyperparams.get('k', '?')}, MCTS={hyperparams.get('mcts_sims', '?')}\n"
-    title += f"LR={hyperparams.get('initial_lr', '?')}, Factor={hyperparams.get('lr_factor', '?')}, Patience={hyperparams.get('lr_patience', '?')}"
-    plt.title(title, fontsize=12) # Adjust font size maybe
-    fig.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to prevent title overlap
+        # Add title
+        title = f"Training Losses & Win Rate vs Initial\n"
+        title += f"Exp: {hyperparams.get('experiment_name', 'N/A')}, V={hyperparams.get('vertices', '?')}, k={hyperparams.get('k', '?')}, MCTS={hyperparams.get('mcts_sims', '?')}\n"
+        title += f"LR={hyperparams.get('initial_lr', '?')}, Factor={hyperparams.get('lr_factor', '?')}, Patience={hyperparams.get('lr_patience', '?')}"
+        plt.title(title, fontsize=12)
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
     
     # Combine legends (might get cluttered, alternative is multiple legends)
     # lines, labels = ax1.get_legend_handles_labels()
@@ -929,7 +1289,8 @@ if __name__ == "__main__":
             if loaded_v != args.vertices or loaded_k != args.k:
                  print("Warning: Model parameters differ from command line args for self-play.")
                  
-            model = CliqueGNN(num_vertices=loaded_v, hidden_dim=loaded_hidden, num_layers=loaded_layers)
+            asymmetric_mode = (args.game_mode == "asymmetric")
+            model = CliqueGNN(num_vertices=loaded_v, hidden_dim=loaded_hidden, num_layers=loaded_layers, asymmetric_mode=asymmetric_mode)
             model.load_state_dict(checkpoint['state_dict'])
             model.share_memory() # Important for multiprocessing
             model.eval()
@@ -972,7 +1333,8 @@ if __name__ == "__main__":
             chk_curr = torch.load(current_model_path, map_location=torch.device('cpu'))
             curr_hidden = chk_curr.get('hidden_dim', args.hidden_dim)
             curr_layers = chk_curr.get('num_layers', args.num_layers)
-            current_model = CliqueGNN(args.vertices, hidden_dim=curr_hidden, num_layers=curr_layers)
+            asymmetric_mode = (args.game_mode == "asymmetric")
+            current_model = CliqueGNN(args.vertices, hidden_dim=curr_hidden, num_layers=curr_layers, asymmetric_mode=asymmetric_mode)
             current_model.load_state_dict(chk_curr['state_dict'])
             current_model.eval()
             
@@ -980,7 +1342,7 @@ if __name__ == "__main__":
             chk_best = torch.load(best_model_path, map_location=torch.device('cpu'))
             best_hidden = chk_best.get('hidden_dim', args.hidden_dim)
             best_layers = chk_best.get('num_layers', args.num_layers)
-            best_model = CliqueGNN(args.vertices, hidden_dim=best_hidden, num_layers=best_layers)
+            best_model = CliqueGNN(args.vertices, hidden_dim=best_hidden, num_layers=best_layers, asymmetric_mode=asymmetric_mode)
             best_model.load_state_dict(chk_best['state_dict'])
             best_model.eval()
 
@@ -1005,7 +1367,8 @@ if __name__ == "__main__":
             checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
             loaded_hidden = checkpoint.get('hidden_dim', args.hidden_dim)
             loaded_layers = checkpoint.get('num_layers', args.num_layers)
-            model = CliqueGNN(args.vertices, hidden_dim=loaded_hidden, num_layers=loaded_layers)
+            asymmetric_mode = (args.game_mode == "asymmetric")
+            model = CliqueGNN(args.vertices, hidden_dim=loaded_hidden, num_layers=loaded_layers, asymmetric_mode=asymmetric_mode)
             model.load_state_dict(checkpoint['state_dict'])
             model.eval()
             

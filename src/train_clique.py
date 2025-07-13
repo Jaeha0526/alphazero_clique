@@ -85,8 +85,11 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     print(f"Training on {len(train_examples)} examples, validating on {len(val_examples)} examples")
     print(f"Model Config: hidden_dim={hidden_dim}, num_layers={num_layers}")
     
+    # Determine asymmetric mode from args
+    asymmetric_mode = getattr(args, 'game_mode', 'symmetric') == 'asymmetric'
+    
     # Initialize network correctly
-    net = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers)
+    net = CliqueGNN(num_vertices, hidden_dim=hidden_dim, num_layers=num_layers, asymmetric_mode=asymmetric_mode)
     
     # Load model from previous iteration
     prev_model_path = f"{model_dir}/clique_net_iter{iteration-1}.pth.tar"
@@ -186,6 +189,12 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
     total_value_loss = 0
     num_examples = 0
     
+    # Track separate losses for asymmetric mode
+    attacker_policy_loss = 0
+    defender_policy_loss = 0
+    attacker_examples = 0
+    defender_examples = 0
+    
     # Try validation on CPU to avoid CUDA errors
     device = torch.device("cpu")
     net.to(device)
@@ -199,8 +208,13 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
                 # Validate on CPU
                 data = data.to(device)
                 
-                # Forward pass
-                policy_output, value_output = net(data.edge_index, data.edge_attr)
+                # Forward pass - pass player role for asymmetric models
+                if hasattr(net, 'asymmetric_mode') and net.asymmetric_mode and hasattr(data, 'player_role') and data.player_role >= 0:
+                    policy_output, value_output = net(data.edge_index, data.edge_attr, player_role=data.player_role)
+                    player_role = data.player_role
+                else:
+                    policy_output, value_output = net(data.edge_index, data.edge_attr)
+                    player_role = -1  # Legacy/symmetric mode
                 
                 # Add small epsilon to avoid log(0)
                 policy_output = policy_output + 1e-8
@@ -214,6 +228,14 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
                 total_value_loss += value_loss.item()
                 num_examples += 1
                 
+                # Track role-specific losses for asymmetric mode
+                if player_role == 0:  # Attacker
+                    attacker_policy_loss += policy_loss.item()
+                    attacker_examples += 1
+                elif player_role == 1:  # Defender
+                    defender_policy_loss += policy_loss.item()
+                    defender_examples += 1
+                
                 if (i+1) % 50 == 0:
                     print(f"Validated {i+1}/{len(val_examples)} examples")
                 
@@ -226,10 +248,29 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
         avg_value_loss = total_value_loss / num_examples
         print(f"Validation Policy Loss: {avg_policy_loss:.4f}")
         print(f"Validation Value Loss: {avg_value_loss:.4f}")
+        
+        # Print separate losses for asymmetric mode
+        if hasattr(net, 'asymmetric_mode') and net.asymmetric_mode:
+            if attacker_examples > 0:
+                avg_attacker_loss = attacker_policy_loss / attacker_examples
+                print(f"Validation Attacker Policy Loss: {avg_attacker_loss:.4f} ({attacker_examples} examples)")
+            else:
+                avg_attacker_loss = 0.0
+                
+            if defender_examples > 0:
+                avg_defender_loss = defender_policy_loss / defender_examples
+                print(f"Validation Defender Policy Loss: {avg_defender_loss:.4f} ({defender_examples} examples)")
+            else:
+                avg_defender_loss = 0.0
+        else:
+            avg_attacker_loss = None
+            avg_defender_loss = None
     else:
         print("No valid examples for validation!")
         avg_policy_loss = 0.0
         avg_value_loss = 0.0
+        avg_attacker_loss = None
+        avg_defender_loss = None
     
     # Save the trained model
     model_path = f"{model_dir}/clique_net_iter{iteration}.pth.tar"
@@ -238,12 +279,17 @@ def train_network(all_examples: List, iteration: int, num_vertices: int, clique_
         'num_vertices': num_vertices,
         'clique_size': clique_size,
         'hidden_dim': hidden_dim,
-        'num_layers': num_layers
+        'num_layers': num_layers,
+        'asymmetric_mode': asymmetric_mode
     }
     torch.save(save_dict, model_path)
     print(f"Model saved to {model_path}")
     
-    return avg_policy_loss, avg_value_loss
+    # Return separate losses for asymmetric mode if available
+    if avg_attacker_loss is not None and avg_defender_loss is not None:
+        return avg_policy_loss, avg_value_loss, avg_attacker_loss, avg_defender_loss
+    else:
+        return avg_policy_loss, avg_value_loss
 
 def train_pipeline(iterations: int = 5, num_vertices: int = 6, data_dir: str = "./datasets/clique", 
                    model_dir: str = "./model_data", clique_size: int = 3, 

@@ -243,7 +243,12 @@ def UCT_search(game_state: CliqueBoard, num_reads: int, net: nn.Module,
             edge_attr = state_dict['edge_attr'].to(device)
             
             with torch.no_grad():
-                child_priors, value_estimate = net(edge_index, edge_attr)
+                # Pass player role for asymmetric models
+                if hasattr(net, 'asymmetric_mode') and net.asymmetric_mode:
+                    player_role = leaf.game.player  # 0 for attacker (Player 1), 1 for defender (Player 2)
+                    child_priors, value_estimate = net(edge_index, edge_attr, player_role=player_role)
+                else:
+                    child_priors, value_estimate = net(edge_index, edge_attr)
                 child_priors = child_priors.cpu().numpy().squeeze()
                 value_estimate = value_estimate.item()
                 
@@ -584,10 +589,13 @@ def MCTS_self_play(clique_net: nn.Module, num_games: int,
                 else:  # Draw
                     value = 0.0
             
+            # Add player role for asymmetric training
+            current_player = game_states[i].player
             example = {
                 'board_state': board_state,
                 'policy': policies[i],
-                'value': value
+                'value': value,
+                'player_role': current_player  # 0 = attacker/Player1, 1 = defender/Player2
             }
             game_examples.append(example)
         
