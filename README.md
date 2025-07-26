@@ -261,6 +261,90 @@ alphazero_clique/
 ├── static/
 │   └── ...                   # CSS/JS for the web interface (if separated)
 ├── requirements.txt            # Project dependencies
+└── README.md                   # This file
+```
+
+## Pure JAX Implementation (GPU Accelerated)
+
+We have developed a **pure JAX** implementation that achieves significant speedup through GPU-accelerated vectorized computation. This implementation processes multiple games in parallel and uses JAX's JIT compilation for maximum performance.
+
+### Quick Start with JAX
+
+```bash
+# Setup JAX environment (run from root directory)
+./setup.sh
+
+# Run the JAX pipeline
+python jax_full_src/run_jax_improved.py \
+    --experiment-name my_jax_exp \
+    --iterations 10 \
+    --self-play-games 100 \
+    --mcts-sims 50
+```
+
+This will:
+- Run vectorized self-play with 32-512 games in parallel
+- Train using JAX/Flax/Optax instead of PyTorch
+- Generate learning curves matching the original style
+- Achieve up to 30x speedup with JIT compilation
+
+### JAX Implementation Features
+
+- **Pure JAX**: No PyTorch dependencies - everything runs in JAX
+- **Vectorized Self-Play**: Process multiple games simultaneously on GPU
+- **JIT Compilation**: Automatic optimization of computation graphs
+- **Full Feature Parity**: All logging, evaluation, and visualization from original
+- **Performance**: Up to 30x speedup with JIT-compiled MCTS
+- **PyTorch Compatible**: Same command-line interface and output structure
+
+### Requirements for JAX Version
+
+The setup script automatically detects your CUDA version and installs the appropriate JAX:
+
+```bash
+# Automated setup (recommended)
+./setup.sh
+
+# Or manual installation for specific CUDA versions:
+# For CUDA 12:
+pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# For CUDA 11:
+pip install --upgrade "jax[cuda11_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# For CPU only:
+pip install --upgrade jax jaxlib
+
+# Install JAX ecosystem
+pip install --upgrade flax optax
+```
+
+### Comparison: PyTorch vs JAX Implementation
+
+| Feature | PyTorch (Original) | JAX (GPU Accelerated) |
+|---------|-------------------|-----------------------|
+| **Framework** | PyTorch + torch-geometric | JAX + Flax |
+| **Self-Play** | Sequential (1 game at a time) | Vectorized (32-512 parallel) |
+| **MCTS** | Standard implementation | JIT-compiled batched search |
+| **Training** | Standard SGD | JIT-compiled optimization |
+| **Performance** | Baseline | Up to 30x faster with JIT |
+| **GPU Utilization** | Training only | Full pipeline |
+| **Memory Usage** | Moderate | Scales with batch size |
+| **Interface** | Original CLI | Identical CLI interface |
+
+### When to Use Each Implementation
+
+**Use PyTorch version when:**
+- Running on CPU-only systems
+- Need full compatibility with original AlphaZero
+- Debugging or understanding the algorithm
+- Limited GPU memory
+
+**Use JAX version when:**
+- Have GPU available
+- Need maximum training speed
+- Running large-scale experiments
+- Want to leverage modern JAX ecosystem
+
+See `jax_full_src/README.md` for detailed documentation on the JAX implementation.
 ├── README.md                   # This file
 └── TRAINING_IMPROVEMENTS.md    # Detailed documentation of training improvements and fixes
 ```

@@ -1,0 +1,14 @@
+# JAX AlphaZero Requirements
+
+# JAX and related
+jax[cuda12_pip]>=0.4.20
+flax>=0.7.5
+optax>=0.1.7
+
+# Core dependencies
+numpy>=1.23.0
+matplotlib>=3.5.0
+tqdm>=4.65.0
+
+# Optional but recommended
+wandb>=0.15.0  # For experiment tracking

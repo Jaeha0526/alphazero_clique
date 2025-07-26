@@ -1,0 +1,22 @@
+# JAX-specific dependencies for GPU acceleration
+# Install with: pip install -r requirements_jax.txt
+
+# JAX with CUDA support (adjust cuda version as needed)
+# For CUDA 11.x
+jax[cuda11_pip]>=0.4.20 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# For CUDA 12.x use:
+# jax[cuda12_pip]>=0.4.20 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+# Neural network libraries for JAX
+flax>=0.7.5
+optax>=0.1.7
+
+# Graph neural network support for JAX
+jraph>=0.0.6.dev0
+
+# Additional utilities
+chex>=0.1.84  # Testing utilities for JAX
+einops>=0.7.0  # Tensor operations
+
+# Keep the original requirements
+-r requirements.txt
