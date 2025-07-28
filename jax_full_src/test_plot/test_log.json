@@ -1,0 +1,1 @@
+[{"iteration": 1, "validation_policy_loss": 2.5, "validation_value_loss": 0.8, "evaluation_win_rate_vs_initial": 0.52}, {"iteration": 2, "validation_policy_loss": 2.2, "validation_value_loss": 0.6, "evaluation_win_rate_vs_initial": 0.65}, {"iteration": 3, "validation_policy_loss": 1.9, "validation_value_loss": 0.4, "evaluation_win_rate_vs_initial": 0.78}]

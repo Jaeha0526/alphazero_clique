@@ -389,15 +389,30 @@ class ImprovedBatchedNeuralNetwork:
         self.asymmetric_mode = asymmetric_mode
         self.num_actions = num_vertices * (num_vertices - 1) // 2
         
-        # Create model and params (this takes time for compilation)
-        print("  Compiling neural network model...")
+        # Create model and params
         self.model, self.params = create_improved_model(
             num_vertices, hidden_dim, num_layers, asymmetric_mode
         )
         
-        # Don't pre-compile - will compile on first use
-        self._batch_eval = None
-        self._compiled = False
+        # Pre-compile evaluation functions
+        if asymmetric_mode:
+            self._batch_eval = jit(
+                lambda p, ei, ef, pr, rng: self.model.apply(
+                    p, ei, ef, pr, 
+                    deterministic=False,
+                    rngs={'dropout': rng},
+                    mutable=['batch_stats']
+                )[0]  # Only return predictions, not updated batch_stats for now
+            )
+        else:
+            self._batch_eval = jit(
+                lambda p, ei, ef, rng: self.model.apply(
+                    p, ei, ef, 
+                    deterministic=False,
+                    rngs={'dropout': rng},
+                    mutable=['batch_stats']
+                )[0]  # Only return predictions, not updated batch_stats for now
+            )
         
         # RNG for dropout
         self.rng = jax.random.PRNGKey(0)
@@ -418,33 +433,16 @@ class ImprovedBatchedNeuralNetwork:
             policies: (batch_size, num_edges) - masked if mask provided
             values: (batch_size, 1)
         """
-        # Compile on first use
-        if not self._compiled:
-            if self.asymmetric_mode:
-                def _eval_fn(params, edge_indices, edge_features, player_roles):
-                    return self.model.apply(
-                        params, edge_indices, edge_features, player_roles,
-                        deterministic=True
-                    )
-            else:
-                def _eval_fn(params, edge_indices, edge_features):
-                    return self.model.apply(
-                        params, edge_indices, edge_features,
-                        deterministic=True
-                    )
-            self._batch_eval = jit(_eval_fn)
-            self._compiled = True
+        # Get new RNG for this evaluation
+        self.rng, eval_rng = jax.random.split(self.rng)
         
-        # Evaluate
         if self.asymmetric_mode:
-            if player_roles is None:
-                player_roles = jnp.zeros((edge_indices.shape[0],), dtype=jnp.int32)
             policies, values = self._batch_eval(
-                self.params, edge_indices, edge_features, player_roles
+                self.params, edge_indices, edge_features, player_roles, eval_rng
             )
         else:
             policies, values = self._batch_eval(
-                self.params, edge_indices, edge_features
+                self.params, edge_indices, edge_features, eval_rng
             )
         
         # Apply valid moves mask if provided
@@ -473,64 +471,3 @@ class ImprovedBatchedNeuralNetwork:
         return policies[0], float(values[0, 0])
 
 
-if __name__ == "__main__":
-    print("Testing Improved Vectorized Neural Network...")
-    print("="*60)
-    
-    # Test symmetric mode
-    print("1. Testing Symmetric Mode:")
-    net_sym = ImprovedBatchedNeuralNetwork(asymmetric_mode=False)
-    
-    # Create undirected edges
-    edge_list = []
-    for i in range(6):
-        for j in range(i+1, 6):
-            edge_list.append([i, j])
-    
-    edge_index = jnp.array(edge_list, dtype=jnp.int32).T
-    edge_features = jnp.ones((15, 3), dtype=jnp.float32) / 3.0
-    
-    policy, value = net_sym.evaluate_single(edge_index, edge_features)
-    print(f"Policy shape: {policy.shape}")
-    print(f"Policy sum: {jnp.sum(policy):.4f}")
-    print(f"Value: {value:.4f}")
-    
-    # Test asymmetric mode
-    print("\n2. Testing Asymmetric Mode:")
-    net_asym = ImprovedBatchedNeuralNetwork(asymmetric_mode=True)
-    
-    # Test as attacker
-    policy_att, value_att = net_asym.evaluate_single(edge_index, edge_features, player_role=0)
-    print(f"Attacker - Policy shape: {policy_att.shape}, Value: {value_att:.4f}")
-    
-    # Test as defender
-    policy_def, value_def = net_asym.evaluate_single(edge_index, edge_features, player_role=1)
-    print(f"Defender - Policy shape: {policy_def.shape}, Value: {value_def:.4f}")
-    
-    # Policies should be different
-    policy_diff = jnp.max(jnp.abs(policy_att - policy_def))
-    print(f"Max policy difference: {policy_diff:.4f}")
-    
-    # Test batch evaluation
-    print("\n3. Testing Batch Evaluation:")
-    batch_size = 128
-    edge_indices = jnp.tile(edge_index[None, :, :], (batch_size, 1, 1))
-    edge_features_batch = jnp.tile(edge_features[None, :, :], (batch_size, 1, 1))
-    player_roles = jnp.array([i % 2 for i in range(batch_size)])
-    
-    policies, values = net_asym.evaluate_batch(
-        edge_indices, edge_features_batch, player_roles=player_roles
-    )
-    print(f"Batch policies shape: {policies.shape}")
-    print(f"Batch values shape: {values.shape}")
-    
-    print("\n" + "="*60)
-    print("✓ Improved Neural Network Implementation Complete!")
-    print("✓ Supports all features from improved-alphazero branch")
-    print("="*60)
-
-
-# Backward compatibility aliases
-VectorizedCliqueGNN = ImprovedVectorizedCliqueGNN
-BatchedNeuralNetwork = ImprovedBatchedNeuralNetwork
-create_vectorized_model = create_improved_model

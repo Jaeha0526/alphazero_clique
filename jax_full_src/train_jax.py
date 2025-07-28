@@ -127,8 +127,12 @@ def prepare_batch(experiences: List[Dict], batch_size: int, rng) -> Dict:
     
     for idx in indices:
         exp = experiences[idx]
-        # Handle both old and new formats
-        if 'board_state' in exp:
+        # Handle different formats
+        if 'edge_indices' in exp:
+            # Optimized format
+            edge_indices.append(exp['edge_indices'])
+            edge_features.append(exp['edge_features'])
+        elif 'board_state' in exp:
             # New format from improved self-play
             edge_indices.append(exp['board_state']['edge_index'])
             edge_features.append(exp['board_state']['edge_attr'])
@@ -185,8 +189,23 @@ def train_network_jax(
     if initial_state is not None:
         state = initial_state
     else:
+        # Handle both Flax models and our wrapper
         rng, init_rng = jax.random.split(rng)
-        state = create_train_state(model, learning_rate, init_rng)
+        if hasattr(model, 'model'):
+            # It's our wrapper - use the underlying Flax model
+            flax_model = model.model
+            params = model.params
+            tx = optax.adam(learning_rate)
+            state = TrainState.create(
+                apply_fn=flax_model.apply,
+                params=params,
+                tx=tx,
+                policy_loss=0.0,
+                value_loss=0.0
+            )
+        else:
+            # It's a Flax model
+            state = create_train_state(model, learning_rate, init_rng)
     
     # Training metrics
     policy_losses = []

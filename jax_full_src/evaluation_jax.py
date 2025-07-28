@@ -1,186 +1,130 @@
 #!/usr/bin/env python
 """
-JAX-based evaluation functions
+JAX-based evaluation functions for tree-based MCTS implementation
 """
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from typing import Tuple
+from typing import Tuple, Dict
 from vectorized_board import VectorizedCliqueBoard
-from vectorized_mcts import SimplifiedVectorizedMCTS
-from vectorized_nn import BatchedNeuralNetwork
-
-
-def evaluate_against_mcts_jax(
-    model_state,
-    model,
-    num_games: int = 20,
-    mcts_simulations: int = 100
-) -> float:
-    """
-    Evaluate model against pure MCTS using JAX.
-    
-    Returns:
-        Win rate of the model
-    """
-    wins = 0
-    draws = 0
-    
-    # Create MCTS instances
-    model_mcts = SimplifiedVectorizedMCTS(
-        batch_size=1,
-        num_actions=15,
-        c_puct=1.0
-    )
-    
-    # For pure MCTS, we need a dummy uniform policy network
-    pure_mcts = SimplifiedVectorizedMCTS(
-        batch_size=1,
-        num_actions=15,
-        c_puct=1.0
-    )
-    
-    for game_idx in range(num_games):
-        # Alternate who goes first
-        model_player = game_idx % 2
-        
-        # Play one game
-        board = VectorizedCliqueBoard(batch_size=1)
-        
-        move_count = 0
-        max_moves = 15  # Maximum possible moves in 6-vertex clique game
-        
-        while move_count < max_moves:
-            # Check if game is over
-            if board.game_states[0] != 0:
-                break
-            
-            # Get current player
-            current_player = int(board.current_players[0])
-            
-            # Select MCTS to use
-            if current_player == model_player:
-                # Model with MCTS
-                edge_indices, edge_features = board.get_features_for_nn()
-                action_probs = model_mcts.search_batch_jit(
-                    edge_indices, edge_features,
-                    board.get_valid_moves_mask(),
-                    jax.random.PRNGKey(game_idx * 100 + move_count)
-                )
-                # Sample action from probabilities
-                action = np.random.choice(15, p=action_probs[0])
-            else:
-                # Pure MCTS
-                edge_indices, edge_features = board.get_features_for_nn()
-                action_probs = pure_mcts.search_batch_jit(
-                    edge_indices, edge_features,
-                    board.get_valid_moves_mask(),
-                    jax.random.PRNGKey(game_idx * 100 + move_count + 1000)
-                )
-                action = np.random.choice(15, p=action_probs[0])
-            
-            # Make move
-            board.make_moves(jnp.array([action]))
-            move_count += 1
-        
-        # Check result
-        game_state = int(board.game_states[0])
-        if game_state == 1:  # Player 1 won
-            if model_player == 0:
-                wins += 1
-        elif game_state == 2:  # Player 2 won
-            if model_player == 1:
-                wins += 1
-        else:
-            draws += 0.5
-    
-    win_rate = (wins + draws) / num_games
-    return win_rate
+from tree_based_mcts import ParallelTreeBasedMCTS
+from vectorized_nn import ImprovedBatchedNeuralNetwork
 
 
 def evaluate_head_to_head_jax(
-    model1_state,
-    model2_state,
-    model,
-    num_games: int = 20
-) -> float:
+    model1: ImprovedBatchedNeuralNetwork,
+    model2: ImprovedBatchedNeuralNetwork,
+    num_games: int = 20,
+    num_vertices: int = 6,
+    k: int = 3,
+    game_mode: str = 'symmetric',
+    mcts_sims: int = 50,
+    batch_size: int = 1,
+    verbose: bool = False
+) -> Dict[str, int]:
     """
-    Evaluate model1 against model2 using JAX.
+    Evaluate model1 against model2 using JAX with tree-based MCTS.
     
     Returns:
-        Win rate of model1
+        Dictionary with evaluation results
     """
+    
     wins = 0
     draws = 0
+    losses = 0
     
-    # Create MCTS instances
-    mcts1 = OptimizedVectorizedMCTS(
-        nn=model,
+    # Create MCTS instances for both models
+    mcts1 = ParallelTreeBasedMCTS(
+        batch_size=1,
+        num_vertices=num_vertices,
+        k=k,
         c_puct=1.0,
-        num_simulations=50,
-        num_actions=15
+        num_simulations=mcts_sims
     )
     
-    mcts2 = OptimizedVectorizedMCTS(
-        nn=model,
+    mcts2 = ParallelTreeBasedMCTS(
+        batch_size=1,
+        num_vertices=num_vertices,
+        k=k,
         c_puct=1.0,
-        num_simulations=50,
-        num_actions=15
+        num_simulations=mcts_sims
     )
     
+    # Play games
     for game_idx in range(num_games):
         # Alternate who goes first
-        model1_player = game_idx % 2
+        model1_starts = (game_idx % 2 == 0)
         
-        # Play one game
-        board = VectorizedCliqueBoard(batch_size=1)
+        # Initialize board
+        board = VectorizedCliqueBoard(
+            batch_size=1,
+            num_vertices=num_vertices,
+            k=k,
+            game_mode=game_mode
+        )
         
-        move_count = 0
-        max_moves = 15
-        
-        while move_count < max_moves:
-            # Check if game is over
-            if board.game_states[0] != 0:
-                break
-            
-            # Get current player
+        # Play game
+        while board.game_states[0] == 0:
             current_player = int(board.current_players[0])
             
-            # Select MCTS to use
-            if current_player == model1_player:
-                # Model 1
-                edge_indices, edge_features = board.get_features_for_nn()
-                action_probs = mcts1.search_batch_jit(
-                    edge_indices, edge_features,
-                    board.get_valid_moves_mask(),
-                    jax.random.PRNGKey(game_idx * 100 + move_count)
+            # Determine which model/MCTS to use
+            if (current_player == 1 and model1_starts) or (current_player == 2 and not model1_starts):
+                # Model 1's turn
+                edge_indices, edge_features = board.get_features_for_nn_undirected()
+                
+                # Get action from MCTS
+                action_probs = mcts1.search(
+                    board.boards,
+                    board.current_players,
+                    board.game_states,
+                    model1,
+                    jax.random.PRNGKey(game_idx * 1000 + board.move_counts[0])
                 )
-                action = np.random.choice(15, p=action_probs[0])
+                
+                # Select action (deterministic for evaluation)
+                valid_mask = board.get_valid_moves_mask()
+                masked_probs = action_probs[0] * valid_mask[0]
+                action = jnp.argmax(masked_probs)
             else:
-                # Model 2
-                edge_indices, edge_features = board.get_features_for_nn()
-                action_probs = mcts2.search_batch_jit(
-                    edge_indices, edge_features,
-                    board.get_valid_moves_mask(),
-                    jax.random.PRNGKey(game_idx * 100 + move_count + 1000)
+                # Model 2's turn
+                edge_indices, edge_features = board.get_features_for_nn_undirected()
+                
+                # Get action from MCTS
+                action_probs = mcts2.search(
+                    board.boards,
+                    board.current_players,
+                    board.game_states,
+                    model2,
+                    jax.random.PRNGKey(game_idx * 1000 + board.move_counts[0] + 500)
                 )
-                action = np.random.choice(15, p=action_probs[0])
+                
+                # Select action
+                valid_mask = board.get_valid_moves_mask()
+                masked_probs = action_probs[0] * valid_mask[0]
+                action = jnp.argmax(masked_probs)
             
             # Make move
             board.make_moves(jnp.array([action]))
-            move_count += 1
         
-        # Check result
+        # Check result from model1's perspective
         game_state = int(board.game_states[0])
-        if game_state == 1:  # Player 1 won
-            if model1_player == 0:
-                wins += 1
-        elif game_state == 2:  # Player 2 won
-            if model1_player == 1:
-                wins += 1
+        winner = board.get_winner(0)
+        
+        if winner == 0:
+            draws += 1
+        elif (winner == 1 and model1_starts) or (winner == 2 and not model1_starts):
+            wins += 1
         else:
-            draws += 0.5
+            losses += 1
     
-    win_rate = (wins + draws) / num_games
-    return win_rate
+    # Calculate statistics
+    win_rate = wins / num_games
+    draw_rate = draws / num_games
+    loss_rate = losses / num_games
+    
+    return {
+        'player1_wins': wins,
+        'draws': draws,
+        'player2_wins': losses
+    }

@@ -345,8 +345,26 @@ pip install --upgrade flax optax
 - Want to leverage modern JAX ecosystem
 
 See `jax_full_src/README.md` for detailed documentation on the JAX implementation.
+
+### Performance Optimization (NEW)
+
+We've conducted extensive performance analysis and optimization of the JAX implementation:
+
+**Key Findings:**
+- Original JAX MCTS: ~35 seconds per move (board copying was 73-77% of time)
+- Optimized JAX MCTS: ~7.2 seconds per move (4.8x speedup)
+- PyTorch MCTS: ~62ms per move (still faster for tree algorithms)
+
+**Optimization Implemented:**
+- Efficient board representation using edge lists instead of adjacency matrices
+- Reduced board copying from O(n²) to O(n) operations
+- 10.9x speedup in board copy operations alone
+
+See `PERFORMANCE_OPTIMIZATION_SUMMARY.md` for detailed analysis and results.
+
 ├── README.md                   # This file
-└── TRAINING_IMPROVEMENTS.md    # Detailed documentation of training improvements and fixes
+├── TRAINING_IMPROVEMENTS.md    # Detailed documentation of training improvements and fixes
+└── PERFORMANCE_OPTIMIZATION_SUMMARY.md  # Performance analysis and optimization results
 ```
 
 ## Analysis and Utilities

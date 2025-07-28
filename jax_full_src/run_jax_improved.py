@@ -110,7 +110,9 @@ def main():
     args = parser.parse_args()
     
     # Set up directories
-    exp_dir = Path(f'experiments/{args.experiment_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+    # Use the main project's experiments directory
+    project_root = Path(__file__).parent.parent  # Go up from jax_full_src to project root
+    exp_dir = project_root / 'experiments' / f'{args.experiment_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
     exp_dir.mkdir(parents=True, exist_ok=True)
     
     checkpoint_dir = exp_dir / 'models'
@@ -145,6 +147,7 @@ def main():
     
     # Get initial parameters from model
     params = model.params
+    optimizer_state = None  # Will be initialized on first training
     
     # Training log
     training_log = {
@@ -215,13 +218,14 @@ def main():
         train_state, train_metrics = train_network_jax(
             model,
             all_examples,
-            params,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
+            args.epochs,
+            args.batch_size,
+            args.learning_rate,
+            verbose=True,
+            initial_state=optimizer_state,
             asymmetric_mode=asymmetric,
-            perspective_mode=args.perspective_mode,
-            l2_weight=1e-5
+            value_weight=1.0,
+            label_smoothing=0.1
         )
         train_time = time.time() - train_start
         
