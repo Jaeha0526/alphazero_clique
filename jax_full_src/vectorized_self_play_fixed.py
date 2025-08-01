@@ -11,7 +11,7 @@ import time
 
 from vectorized_board import VectorizedCliqueBoard
 from vectorized_nn import ImprovedBatchedNeuralNetwork
-from tree_based_mcts import ParallelTreeBasedMCTS
+from mctx_final_optimized import MCTXFinalOptimized
 
 
 @dataclass
@@ -138,14 +138,8 @@ class FixedVectorizedSelfPlay:
             # Also reduce noise weight as the game progresses (matching PyTorch)
             current_noise_weight = self.config.noise_weight * (1.0 - move_progress)
             
-            # Create MCTS with updated noise weight for this move
-            mcts = ParallelTreeBasedMCTS(
-                batch_size,
-                num_actions=self.num_edges,
-                c_puct=self.config.c_puct,
-                noise_weight=current_noise_weight,
-                perspective_mode=self.config.perspective_mode
-            )
+            # Create MCTS using final optimized implementation
+            mcts = MCTXFinalOptimized(batch_size=batch_size)
             
             # Run MCTS for all active games
             action_probs = mcts.search(boards, self.nn, current_sim_counts, temperature)

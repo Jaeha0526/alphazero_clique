@@ -21,6 +21,7 @@ from typing import Any
 from vectorized_board import VectorizedCliqueBoard
 from vectorized_nn import ImprovedBatchedNeuralNetwork
 from vectorized_self_play_fixed import FixedVectorizedSelfPlay, FixedSelfPlayConfig
+from mctx_final_optimized import MCTXFinalOptimized
 from train_jax import train_network_jax
 from evaluation_jax import evaluate_head_to_head_jax
 

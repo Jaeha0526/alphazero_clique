@@ -235,67 +235,72 @@ This architecture efficiently captures both local edge relationships and global 
 
 ```
 alphazero_clique/
-├── playable_models/        # Directory to place trained models for the interactive UI
-├── experiments/            # Experiment-specific directories (organized by experiment name)
+├── experiments/            # Experiment results (35 experiments with data preserved)
 │   └── <experiment_name>/
-│       ├── models/         # Stores trained models (clique_net.pth.tar, clique_net_iterN.pth.tar)
-│       ├── datasets/       # Stores self-play game data (.pkl files)
-│       └── training_log.json # Training progress and evaluation metrics
-├── src/
-│   ├── pipeline_clique.py      # Main AlphaZero pipeline script & modes
-│   ├── interactive_clique_game.py  # Web interface server (Flask)
-│   ├── alpha_net_clique.py     # Neural network architecture (CliqueGNN)
-│   ├── clique_board.py         # Game logic and board state
-│   ├── MCTS_clique.py          # Monte Carlo Tree Search implementation
-│   ├── train_clique.py         # Standalone training script & utilities (used by pipeline)
-│   ├── encoder_decoder_clique.py # Helpers for board state/action encoding
-│   ├── visualize_clique.py     # Board visualization helpers
-│   └── check_model_keys.py     # Utility script to inspect saved model files
-├── compare_perspectives.py     # Compare fixed vs alternating perspective experiments
-├── analyze_data.py             # Data analysis utilities for training logs
-├── policy_analysis.py          # Policy prediction analysis
-├── action_sequence_analysis.py # Game action sequence analysis
-├── sweep_config.yaml           # Wandb sweep configuration for hyperparameter optimization
-├── templates/
-│   └── index.html            # HTML template for the web interface
-├── static/
-│   └── ...                   # CSS/JS for the web interface (if separated)
-├── requirements.txt            # Project dependencies
-└── README.md                   # This file
+│       ├── models/         # Trained models
+│       ├── datasets/       # Self-play game data
+│       ├── checkpoints/    # JAX model checkpoints
+│       └── training_log.json # Training metrics
+├── src/                    # Original PyTorch implementation
+│   ├── pipeline_clique.py      # Main AlphaZero pipeline
+│   ├── interactive_clique_game.py  # Web interface
+│   ├── alpha_net_clique.py     # GNN architecture
+│   ├── clique_board.py         # Game logic
+│   ├── MCTS_clique.py          # MCTS implementation
+│   └── train_clique.py         # Training utilities
+├── jax_full_src/           # JAX implementation with MCTX
+│   ├── run_jax_optimized.py    # Main entry point (uses MCTXFinalOptimized)
+│   ├── mctx_final_optimized.py # Optimized MCTS implementation
+│   ├── vectorized_board.py     # Vectorized game logic
+│   ├── vectorized_nn.py        # JAX neural network
+│   ├── train_jax.py            # JAX training
+│   └── archive/                # Older implementations preserved
+├── templates/              # Web interface templates
+├── requirements.txt        # PyTorch dependencies
+├── requirements_jax.txt    # JAX dependencies
+├── README.md              # This file
+├── MCTX_ANALYSIS_SUMMARY.md    # MCTX performance analysis
+├── MCTX_PIPELINE_UPDATE_SUMMARY.md # Integration guide
+└── JAX_VS_PYTORCH_PIPELINE_COMPARISON.md # Detailed comparison
 ```
 
 ## Pure JAX Implementation (GPU Accelerated)
 
-We have developed a **pure JAX** implementation that achieves significant speedup through GPU-accelerated vectorized computation. This implementation processes multiple games in parallel and uses JAX's JIT compilation for maximum performance.
+We have developed a **pure JAX** implementation with an optimized MCTX (Monte Carlo Tree Search in JAX) that achieves significant speedup through GPU-accelerated vectorized computation. This implementation processes multiple games in parallel and uses JAX's JIT compilation for maximum performance.
 
 ### Quick Start with JAX
 
 ```bash
-# Setup JAX environment (run from root directory)
-./setup.sh
+# Setup JAX environment (run from jax_full_src directory)
+cd jax_full_src
+./setup_gpu_env.sh
 
-# Run the JAX pipeline
-python jax_full_src/run_jax_improved.py \
-    --experiment-name my_jax_exp \
-    --iterations 10 \
-    --self-play-games 100 \
-    --mcts-sims 50
+# Run the JAX pipeline with optimized MCTX
+python run_jax_optimized.py \
+    --experiment_name my_jax_exp \
+    --num_iterations 10 \
+    --num_episodes 100 \
+    --mcts_sims 50 \
+    --batch_size 32 \
+    --vertices 6 \
+    --k 3
 ```
 
 This will:
-- Run vectorized self-play with 32-512 games in parallel
+- Use the optimized MCTXFinalOptimized implementation
+- Run vectorized self-play with configurable batch sizes
 - Train using JAX/Flax/Optax instead of PyTorch
-- Generate learning curves matching the original style
-- Achieve up to 30x speedup with JIT compilation
+- Generate learning curves and checkpoints
+- Achieve significant speedup with pre-allocated arrays and JIT compilation
 
 ### JAX Implementation Features
 
+- **Optimized MCTX**: Custom MCTS implementation with pre-allocated arrays and vectorized operations
 - **Pure JAX**: No PyTorch dependencies - everything runs in JAX
 - **Vectorized Self-Play**: Process multiple games simultaneously on GPU
 - **JIT Compilation**: Automatic optimization of computation graphs
-- **Full Feature Parity**: All logging, evaluation, and visualization from original
-- **Performance**: Up to 30x speedup with JIT-compiled MCTS
-- **PyTorch Compatible**: Same command-line interface and output structure
+- **Scalable Performance**: Optimal for different game sizes (n,k)
+- **PyTorch Compatible**: Similar command-line interface and output structure
 
 ### Requirements for JAX Version
 
@@ -319,81 +324,62 @@ pip install --upgrade flax optax
 
 ### Comparison: PyTorch vs JAX Implementation
 
-| Feature | PyTorch (Original) | JAX (GPU Accelerated) |
+| Feature | PyTorch (Original) | JAX (MCTX Optimized) |
 |---------|-------------------|-----------------------|
 | **Framework** | PyTorch + torch-geometric | JAX + Flax |
-| **Self-Play** | Sequential (1 game at a time) | Vectorized (32-512 parallel) |
-| **MCTS** | Standard implementation | JIT-compiled batched search |
-| **Training** | Standard SGD | JIT-compiled optimization |
-| **Performance** | Baseline | Up to 30x faster with JIT |
+| **Self-Play** | CPU multiprocessing | Vectorized GPU batches |
+| **MCTS** | Tree-based with dictionaries | Pre-allocated arrays (MCTXFinalOptimized) |
+| **Training** | Standard Adam | JIT-compiled Optax |
+| **Performance (n=6,k=3)** | ~30ms/game | ~250ms/game (batch 16) |
+| **Performance (n=9,k=4)** | ~660ms/game | ~119ms/game (5.6x faster) |
 | **GPU Utilization** | Training only | Full pipeline |
-| **Memory Usage** | Moderate | Scales with batch size |
-| **Interface** | Original CLI | Identical CLI interface |
+| **Memory Usage** | Low | Pre-allocated arrays |
+| **Interface** | Original CLI | Similar CLI with JAX options |
 
 ### When to Use Each Implementation
 
 **Use PyTorch version when:**
-- Running on CPU-only systems
-- Need full compatibility with original AlphaZero
+- Running small games (n≤6) with small batches
+- Need CPU multiprocessing
 - Debugging or understanding the algorithm
-- Limited GPU memory
+- Want the most stable, tested implementation
 
 **Use JAX version when:**
-- Have GPU available
-- Need maximum training speed
-- Running large-scale experiments
-- Want to leverage modern JAX ecosystem
+- Running large games (n≥9) - always faster
+- Processing large batches (>50 games)
+- Have GPU available with sufficient memory
+- Want to leverage JAX ecosystem features
 
 See `jax_full_src/README.md` for detailed documentation on the JAX implementation.
 
-### Performance Optimization (NEW)
+### Performance Optimization with MCTX
 
-We've conducted extensive performance analysis and optimization of the JAX implementation:
+We've implemented a highly optimized MCTS in JAX (MCTXFinalOptimized) with the following improvements:
 
-**Key Findings:**
-- Original JAX MCTS: ~35 seconds per move (board copying was 73-77% of time)
-- Optimized JAX MCTS: ~7.2 seconds per move (4.8x speedup)
-- PyTorch MCTS: ~62ms per move (still faster for tree algorithms)
+**Key Performance Results:**
+- **Small games (n=6, k=3)**: PyTorch faster for batch < 54
+- **Large games (n=9, k=4)**: JAX always faster (5.6x speedup)
+- **Crossover point**: Depends on game size and batch size
 
-**Optimization Implemented:**
-- Efficient board representation using edge lists instead of adjacency matrices
-- Reduced board copying from O(n²) to O(n) operations
-- 10.9x speedup in board copy operations alone
+**Optimizations Implemented:**
+- Pre-allocated arrays for tree nodes (no dynamic allocation)
+- Vectorized UCB calculations across all actions
+- JIT-compiled tree traversal and backup
+- Efficient batch processing with vmap
 
-See `PERFORMANCE_OPTIMIZATION_SUMMARY.md` for detailed analysis and results.
+See `MCTX_ANALYSIS_SUMMARY.md` and `MCTX_PIPELINE_UPDATE_SUMMARY.md` for detailed analysis.
 
-├── README.md                   # This file
-├── TRAINING_IMPROVEMENTS.md    # Detailed documentation of training improvements and fixes
-└── PERFORMANCE_OPTIMIZATION_SUMMARY.md  # Performance analysis and optimization results
-```
 
 ## Analysis and Utilities
 
-Several analysis scripts are available to evaluate experiments and compare results:
+The main analysis capabilities are built into the pipeline and training scripts:
 
-**Compare Perspective Modes:**
-```bash
-python compare_perspectives.py
-```
-Compares training results between fixed and alternating perspective experiments, generating comparison plots and detailed statistics.
+- **Training Logs**: Each experiment generates `training_log.json` with detailed metrics
+- **Learning Curves**: Automatically generated `training_losses.png` plots
+- **Model Checkpoints**: Saved at each iteration for analysis
+- **Self-Play Data**: Pickled game records for replay analysis
 
-**Analyze Training Data:**
-```bash
-python analyze_data.py
-```
-Analyzes training logs and generates visualizations of learning progress.
-
-**Policy Analysis:**
-```bash
-python policy_analysis.py
-```
-Examines policy predictions and decision patterns from trained models.
-
-**Action Sequence Analysis:**
-```bash
-python action_sequence_analysis.py
-```
-Analyzes game action sequences and patterns from self-play data.
+For JAX experiments, additional metrics are saved in `metrics_iter_*.json` files.
 
 ## Experiment Tracking
 

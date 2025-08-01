@@ -53,14 +53,13 @@ This is a pure JAX implementation of AlphaZero for the Clique game, achieving fe
 ### Core Implementation (Pure JAX)
 - `vectorized_board.py` - Game logic and board representation
 - `vectorized_nn.py` - Neural network using Flax
-- `vectorized_mcts_improved.py` - MCTS implementation
-- `vectorized_self_play_improved.py` - Self-play game generation
+- `tree_based_mcts.py` - Proper tree-based MCTS implementation (FIXED)
+- `simple_tree_mcts.py` - Simplified tree MCTS with parallel game support
+- `simple_tree_mcts_timed.py` - Tree MCTS with timing/profiling
+- `vectorized_self_play_fixed.py` - Self-play using proper tree MCTS
 - `train_jax.py` - Training loop with loss functions
 - `run_jax_improved.py` - Main pipeline script
-
-### JIT-Optimized Versions (Work in Progress)
-- `vectorized_mcts_jit.py` - JIT-compiled MCTS (has shape issues)
-- `vectorized_self_play_jit.py` - JIT-compiled self-play (has shape issues)
+- `run_jax_optimized.py` - Optimized pipeline (uses SimpleTreeMCTS)
 
 ### Testing Files
 - `test_architecture_parity.py` - Verifies architectural match with PyTorch
@@ -112,14 +111,18 @@ Key arguments:
 
 ## Performance Comparison
 
-### Expected Performance (with JIT)
-- PyTorch: ~0.6 games/second
-- JAX: ~40 games/second (67x speedup)
+### Current Performance (CPU-only environment)
+- PyTorch: ~19.3ms per MCTS search (sequential)
+- JAX TreeBasedMCTS: ~515ms per search (sequential)
+- JAX SimpleTreeMCTS: ~413ms per game (parallel processing)
 
-### Current Performance (without JIT)
-- JAX: ~0.07 games/second (10x slower than PyTorch)
-
-The performance regression is due to JIT compilation issues that need to be resolved.
+### Performance Notes
+- JAX is currently slower due to:
+  1. Running on CPU (no GPU available)
+  2. Tree-based algorithms are hard to vectorize efficiently
+  3. Python overhead for tree management
+- PyTorch's sequential implementation is well-optimized for CPU
+- With GPU and proper optimization, JAX could potentially be faster
 
 ## Technical Details
 

@@ -21,11 +21,9 @@ import matplotlib.pyplot as plt
 
 from vectorized_board import VectorizedCliqueBoard
 from vectorized_nn import ImprovedBatchedNeuralNetwork
-from simple_tree_mcts import SimpleTreeMCTS
-from simple_tree_mcts_timed import SimpleTreeMCTSTimed
-from jit_mcts_simple import VectorizedJITMCTS
+from mctx_final_optimized import MCTXFinalOptimized
 from train_jax import train_network_jax
-from evaluation_simple import evaluate_head_to_head_jax
+from evaluation_jax import evaluate_head_to_head_jax
 
 
 class OptimizedSelfPlay:
@@ -47,14 +45,9 @@ class OptimizedSelfPlay:
             
             # Create MCTS with correct batch size for this iteration
             num_actions = self.config.num_vertices * (self.config.num_vertices - 1) // 2
-            print(f"  Creating Simple Tree MCTS with JIT: {num_actions} actions, batch_size={batch_size}")
-            # Use timed version for analysis
-            mcts = SimpleTreeMCTSTimed(
-                batch_size=batch_size,
-                num_actions=num_actions,
-                c_puct=self.config.c_puct,
-                max_nodes_per_game=200
-            )
+            print(f"  Creating MCTXFinalOptimized: {num_actions} actions, batch_size={batch_size}")
+            # Use the final optimized MCTX implementation
+            mcts = MCTXFinalOptimized(batch_size=batch_size)
             
             # Initialize boards
             print(f"  Initializing boards: n={self.config.num_vertices}, k={self.config.k}, mode={self.config.game_mode}")
@@ -108,7 +101,10 @@ class OptimizedSelfPlay:
                 actions = []
                 for i in range(batch_size):
                     if active_mask[i]:
-                        action = np.random.choice(num_actions, p=np.array(mcts_probs[i]))
+                        # Normalize probabilities to ensure they sum to 1
+                        probs = np.array(mcts_probs[i])
+                        probs = probs / probs.sum()
+                        action = np.random.choice(num_actions, p=probs)
                         actions.append(action)
                     else:
                         actions.append(0)
@@ -271,6 +267,12 @@ def main():
                         help='Directory to save checkpoints')
     parser.add_argument('--asymmetric', action='store_true',
                         help='Use asymmetric game mode')
+    parser.add_argument('--vertices', type=int, default=6,
+                        help='Number of vertices in the graph')
+    parser.add_argument('--k', type=int, default=3,
+                        help='Clique size to win')
+    parser.add_argument('--mcts_sims', type=int, default=50,
+                        help='Number of MCTS simulations per move')
     parser.add_argument('--experiment_name', type=str, default='optimized_jax_run',
                         help='Name for this experiment')
     parser.add_argument('--resume_from', type=str, default=None,
@@ -300,10 +302,10 @@ def main():
     @dataclass
     class Config:
         batch_size: int = args.batch_size
-        num_vertices: int = 6  # Smaller for testing
-        k: int = 3  # Smaller for testing
+        num_vertices: int = args.vertices
+        k: int = args.k
         game_mode: str = "asymmetric" if args.asymmetric else "symmetric"
-        mcts_simulations: int = 20  # Very small for testing pipeline
+        mcts_simulations: int = args.mcts_sims
         temperature_threshold: int = 10
         c_puct: float = 3.0
         perspective_mode: str = "alternating"
