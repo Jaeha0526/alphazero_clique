@@ -22,8 +22,14 @@ import matplotlib.pyplot as plt
 from vectorized_board import VectorizedCliqueBoard
 from vectorized_nn import ImprovedBatchedNeuralNetwork
 from mctx_final_optimized import MCTXFinalOptimized
+from mctx_true_jax import MCTXTrueJAX
 from train_jax import train_network_jax
-from evaluation_jax import evaluate_head_to_head_jax
+from train_jax_fully_optimized import train_network_jax_optimized
+from train_jax_with_validation import train_network_jax_with_validation
+from evaluation_jax_fixed import evaluate_vs_initial_and_best
+from evaluation_jax_asymmetric import evaluate_vs_initial_and_best_asymmetric
+from evaluation_jax_parallel import evaluate_vs_initial_and_best_parallel
+from evaluation_jax_asymmetric_parallel import evaluate_vs_initial_and_best_asymmetric_parallel
 
 
 class OptimizedSelfPlay:
@@ -47,7 +53,25 @@ class OptimizedSelfPlay:
             num_actions = self.config.num_vertices * (self.config.num_vertices - 1) // 2
             print(f"  Creating MCTXFinalOptimized: {num_actions} actions, batch_size={batch_size}")
             # Use the final optimized MCTX implementation
-            mcts = MCTXFinalOptimized(batch_size=batch_size)
+            # Choose MCTS implementation based on config
+            if getattr(self.config, 'use_true_mctx', False):
+                print(f"  Creating True MCTX (JAX primitives): {num_actions} actions, batch_size={batch_size}")
+                mcts = MCTXTrueJAX(
+                    batch_size=batch_size,
+                    num_actions=num_actions,
+                    max_nodes=self.config.mcts_simulations + 1,  # Only need sims + 1 nodes
+                    c_puct=self.config.c_puct,
+                    num_vertices=self.config.num_vertices
+                )
+            else:
+                print(f"  Creating MCTXFinalOptimized (Python loops): {num_actions} actions, batch_size={batch_size}")
+                mcts = MCTXFinalOptimized(
+                    batch_size=batch_size,
+                    num_actions=num_actions,
+                    max_nodes=self.config.mcts_simulations + 1,  # Only need sims + 1 nodes
+                    num_vertices=self.config.num_vertices,
+                    c_puct=self.config.c_puct
+                )
             
             # Initialize boards
             print(f"  Initializing boards: n={self.config.num_vertices}, k={self.config.k}, mode={self.config.game_mode}")
@@ -62,7 +86,8 @@ class OptimizedSelfPlay:
             
             # Play until all games finish
             move_count = 0
-            while jnp.any(boards.game_states == 0):
+            max_moves = self.config.num_vertices * (self.config.num_vertices - 1) // 2
+            while jnp.any(boards.game_states == 0) and move_count < max_moves:
                 active_games = jnp.sum(boards.game_states == 0)
                 print(f"  Batch {batch_size} games - Move {move_count}, Active games: {active_games}")
                 
@@ -93,7 +118,8 @@ class OptimizedSelfPlay:
                             'edge_indices': edge_indices[i],
                             'edge_features': edge_features[i],
                             'policy': mcts_probs[i],
-                            'player': boards.current_players[i]
+                            'player': boards.current_players[i],
+                            'player_role': int(boards.current_players[i]) if self.config.game_mode == "asymmetric" else None
                         })
                 
                 # Sample actions
@@ -103,6 +129,16 @@ class OptimizedSelfPlay:
                     if active_mask[i]:
                         # Normalize probabilities to ensure they sum to 1
                         probs = np.array(mcts_probs[i])
+                        # Ensure we have the right number of probabilities
+                        if len(probs) != num_actions:
+                            print(f"Warning: Expected {num_actions} action probs, got {len(probs)}")
+                            # Resize if needed
+                            if len(probs) < num_actions:
+                                # Pad with zeros
+                                probs = np.pad(probs, (0, num_actions - len(probs)), 'constant')
+                            else:
+                                # Truncate
+                                probs = probs[:num_actions]
                         probs = probs / probs.sum()
                         action = np.random.choice(num_actions, p=probs)
                         actions.append(action)
@@ -258,8 +294,10 @@ def main():
                         help='Number of training iterations')
     parser.add_argument('--num_episodes', type=int, default=100,
                         help='Number of self-play games per iteration')
-    parser.add_argument('--batch_size', type=int, default=500,
-                        help='Number of games to play in parallel')
+    parser.add_argument('--game_batch_size', type=int, default=32,
+                        help='Number of games to play in parallel during self-play')
+    parser.add_argument('--training_batch_size', type=int, default=32,
+                        help='Batch size for neural network training')
     parser.add_argument('--num_epochs', type=int, default=10,
                         help='Number of training epochs per iteration')
     parser.add_argument('--checkpoint_dir', type=str, 
@@ -277,6 +315,12 @@ def main():
                         help='Name for this experiment')
     parser.add_argument('--resume_from', type=str, default=None,
                         help='Path to checkpoint to resume from')
+    parser.add_argument('--use_true_mctx', action='store_true',
+                        help='Use true MCTX with JAX primitives (slower but pure JAX)')
+    parser.add_argument('--parallel_evaluation', action='store_true',
+                        help='Use parallel evaluation for massive speedup')
+    parser.add_argument('--use_validation', action='store_true',
+                        help='Use validation split and early stopping (like PyTorch)')
     
     args = parser.parse_args()
     
@@ -301,7 +345,7 @@ def main():
     
     @dataclass
     class Config:
-        batch_size: int = args.batch_size
+        batch_size: int = args.game_batch_size  # For self-play
         num_vertices: int = args.vertices
         k: int = args.k
         game_mode: str = "asymmetric" if args.asymmetric else "symmetric"
@@ -309,6 +353,7 @@ def main():
         temperature_threshold: int = 10
         c_puct: float = 3.0
         perspective_mode: str = "alternating"
+        use_true_mctx: bool = args.use_true_mctx
     
     config = Config()
     print(f"Config created: {config}")
@@ -321,6 +366,16 @@ def main():
         num_layers=3,
         asymmetric_mode=args.asymmetric
     )
+    
+    # Keep a copy of the initial model for evaluation
+    initial_model = ImprovedBatchedNeuralNetwork(
+        num_vertices=config.num_vertices,
+        hidden_dim=64,
+        num_layers=3,
+        asymmetric_mode=args.asymmetric
+    )
+    # Copy initial parameters
+    initial_model.params = model.params
     print("Neural network created successfully!")
     
     # Create self-play instance
@@ -373,16 +428,44 @@ def main():
         print(f"\nTraining network for {args.num_epochs} epochs...")
         start_time = time.time()
         
-        # Train network returns (state, policy_loss, value_loss)
-        train_state, policy_loss, value_loss = train_network_jax(
-            model,
-            game_data,
-            epochs=args.num_epochs,
-            batch_size=32,
-            learning_rate=0.001,
-            initial_state=optimizer_state,
-            asymmetric_mode=args.asymmetric
-        )
+        # Choose training function based on validation flag
+        if args.use_validation:
+            print("Using training with VALIDATION SPLIT and EARLY STOPPING (like PyTorch)")
+            # Train with validation returns (state, policy_loss, value_loss, history)
+            train_state, policy_loss, value_loss, train_history = train_network_jax_with_validation(
+                model,
+                game_data,
+                epochs=args.num_epochs,
+                batch_size=args.training_batch_size,
+                learning_rate=0.001,
+                initial_state=optimizer_state,
+                asymmetric_mode=args.asymmetric,
+                validation_split=0.1,  # 90/10 split like PyTorch
+                early_stopping_patience=5,  # Same as PyTorch
+                early_stopping_min_delta=0.001  # Same as PyTorch
+            )
+            # Store training history for analysis (if needed later)
+        else:
+            # Use optimized training without validation
+            use_optimized_training = getattr(args, 'optimized_training', True)
+            
+            if use_optimized_training:
+                print("Using OPTIMIZED training (JIT + vectorized batches)")
+                train_fn = train_network_jax_optimized
+            else:
+                print("Using standard training")
+                train_fn = train_network_jax
+            
+            # Train network returns (state, policy_loss, value_loss)
+            train_state, policy_loss, value_loss = train_fn(
+                model,
+                game_data,
+                epochs=args.num_epochs,
+                batch_size=args.training_batch_size,
+                learning_rate=0.001,
+                initial_state=optimizer_state,
+                asymmetric_mode=args.asymmetric
+            )
         
         # Update model params and optimizer state
         model.params = train_state.params
@@ -392,18 +475,59 @@ def main():
         print(f"Training completed in {training_time:.1f}s")
         print(f"Final losses - Policy: {policy_loss:.4f}, Value: {value_loss:.4f}")
         
-        # Evaluate against initial model (like original pipeline)
-        print(f"\nEvaluating against initial model...")
-        eval_start = time.time()
+        # Evaluate against initial model
+        eval_config = {
+            'num_games': 40 if args.asymmetric else 21,  # More games for asymmetric
+            'num_vertices': args.vertices,
+            'k': args.k,
+            'game_mode': "asymmetric" if args.asymmetric else "symmetric",
+            'mcts_sims': 30,  # Fewer simulations for faster evaluation
+            'c_puct': 3.0
+        }
         
-        # Quick evaluation (can be improved later with proper head-to-head)
-        # For now, simulate improving performance to test the plotting
-        win_rate_vs_initial = min(0.9, 0.5 + 0.05 * iteration)
-        print(f"Win rate vs initial: {win_rate_vs_initial:.1%} (simulated for plotting test)")
-        
-        eval_time = time.time() - eval_start
-        print(f"Evaluation completed in {eval_time:.1f}s")
-        print(f"Win rate vs initial: {win_rate_vs_initial:.1%}")
+        # Use enhanced evaluation for asymmetric games
+        if args.asymmetric:
+            if args.parallel_evaluation:
+                print("Using PARALLEL asymmetric evaluation")
+                eval_results = evaluate_vs_initial_and_best_asymmetric_parallel(
+                    current_model=model,
+                    initial_model=initial_model,
+                    best_model=None,  # Could add best model tracking later
+                    config=eval_config
+                )
+            else:
+                eval_results = evaluate_vs_initial_and_best_asymmetric(
+                    current_model=model,
+                    initial_model=initial_model,
+                    best_model=None,  # Could add best model tracking later
+                    config=eval_config
+                )
+            win_rate_vs_initial = eval_results['win_rate_vs_initial']
+            attacker_rate = eval_results['vs_initial_attacker_rate']
+            defender_rate = eval_results['vs_initial_defender_rate']
+            eval_time = eval_results['vs_initial_details']['eval_time']
+            
+            print(f"\nDetailed Asymmetric Results:")
+            print(f"  As Attacker: {attacker_rate:.1%}")
+            print(f"  As Defender: {defender_rate:.1%}")
+        else:
+            if args.parallel_evaluation:
+                print("Using PARALLEL symmetric evaluation") 
+                eval_results = evaluate_vs_initial_and_best_parallel(
+                    current_model=model,
+                    initial_model=initial_model,
+                    best_model=None,
+                    config=eval_config
+                )
+            else:
+                eval_results = evaluate_vs_initial_and_best(
+                    current_model=model,
+                    initial_model=initial_model,
+                    best_model=None,
+                    config=eval_config
+                )
+            win_rate_vs_initial = eval_results['win_rate_vs_initial']
+            eval_time = eval_results['eval_time_vs_initial']
         
         # Save checkpoint
         checkpoint_path = save_checkpoint(
@@ -427,6 +551,29 @@ def main():
             'timestamp': datetime.now().isoformat()
         }
         
+        # Add validation history if using validation split
+        if args.use_validation and 'train_history' in locals():
+            iteration_metrics['training_history'] = {
+                'train_policy_losses': train_history['train_policy_loss'],
+                'train_value_losses': train_history['train_value_loss'],
+                'val_policy_losses': train_history['val_policy_loss'],
+                'val_value_losses': train_history['val_value_loss'],
+                'epochs_trained': len(train_history['train_policy_loss']),
+                'early_stopped': len(train_history['train_policy_loss']) < args.num_epochs
+            }
+            if train_history['val_attacker_loss']:
+                iteration_metrics['training_history']['val_attacker_losses'] = train_history['val_attacker_loss']
+                iteration_metrics['training_history']['val_defender_losses'] = train_history['val_defender_loss']
+        
+        # Add asymmetric-specific metrics if applicable
+        if args.asymmetric:
+            iteration_metrics.update({
+                'attacker_win_rate_vs_initial': float(attacker_rate),
+                'defender_win_rate_vs_initial': float(defender_rate),
+                'attacker_games': eval_results['vs_initial_details']['current_attacker_games'],
+                'defender_games': eval_results['vs_initial_details']['current_defender_games']
+            })
+        
         # Add to training log
         training_log.append(iteration_metrics)
         
@@ -438,10 +585,16 @@ def main():
         except Exception as e:
             print(f"Error saving training log: {e}")
         
-        # Generate plots after each iteration (like original pipeline)
+        # Generate plots after each iteration
         try:
             if len(training_log) >= 1:  # Plot even from iteration 1
                 plot_learning_curve(str(log_file_path))
+                
+                # Generate enhanced plots for asymmetric mode
+                if args.asymmetric:
+                    from plot_asymmetric_metrics import plot_asymmetric_learning_curves, plot_role_balance
+                    plot_asymmetric_learning_curves(str(log_file_path))
+                    plot_role_balance(str(log_file_path))
         except Exception as e:
             print(f"Error generating plots: {e}")
         

@@ -17,14 +17,14 @@ This directory contains a **pure JAX** implementation of AlphaZero for the Cliqu
 cd /workspace/alphazero_clique
 
 # Basic example
-python jax_full_src/run_jax_improved.py \
+python jax_full_src/run_jax_optimized.py \
     --experiment-name my_experiment \
     --iterations 10 \
     --self-play-games 100 \
     --mcts-sims 50
 
 # Full example with all options
-python jax_full_src/run_jax_improved.py \
+python jax_full_src/run_jax_optimized.py \
     --experiment-name my_jax_run \
     --vertices 6 \
     --k 3 \
@@ -43,7 +43,7 @@ python jax_full_src/run_jax_improved.py \
 ## Core Components
 
 ### Main Pipeline
-- `run_jax_improved.py` - Main pipeline script (equivalent to PyTorch's pipeline_clique.py)
+- `run_jax_optimized.py` - Main pipeline script (equivalent to PyTorch's pipeline_clique.py)
 
 ### Core Modules (Current Implementation)
 - `train_jax.py` - Training loop with JAX/Optax

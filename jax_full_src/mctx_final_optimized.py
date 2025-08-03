@@ -82,14 +82,15 @@ class MCTXFinalOptimized:
     """
     
     def __init__(self, batch_size: int, num_actions: int = 15, 
-                 max_nodes: int = 500, c_puct: float = 3.0):
+                 max_nodes: int = 500, c_puct: float = 3.0, num_vertices: int = 6):
         self.batch_size = batch_size
         self.num_actions = num_actions
         self.max_nodes = max_nodes
         self.c_puct = c_puct
+        self.num_vertices = num_vertices
         
         # Feature extractor
-        self.feature_extractor = OptimizedBoardFeatures()
+        self.feature_extractor = OptimizedBoardFeatures(num_vertices=num_vertices)
         
         # Pre-compile critical functions
         self._init_arrays = jax.jit(self._init_arrays_impl)
@@ -248,8 +249,8 @@ class MCTXFinalOptimized:
         # Setup root - convert from board format
         root_edge_states = jnp.zeros((self.batch_size, self.num_actions), dtype=jnp.int32)
         edge_idx = 0
-        for i in range(6):
-            for j in range(i + 1, 6):
+        for i in range(self.num_vertices):
+            for j in range(i + 1, self.num_vertices):
                 root_edge_states = root_edge_states.at[:, edge_idx].set(
                     root_boards.edge_states[:, i, j]
                 )
@@ -287,7 +288,8 @@ class MCTXFinalOptimized:
         
         if temperature == 0:
             masked_visits = jnp.where(root_valid, root_visits, -jnp.inf)
-            action_probs = (masked_visits == jnp.max(masked_visits, axis=1, keepdims=True)).astype(jnp.float32)
+            is_max = (masked_visits == jnp.max(masked_visits, axis=1, keepdims=True)).astype(jnp.float32)
+            action_probs = is_max / jnp.sum(is_max, axis=1, keepdims=True)
         else:
             root_visits_temp = jnp.power(root_visits + 1e-8, 1.0 / temperature)
             root_visits_temp = jnp.where(root_valid, root_visits_temp, 0.0)
@@ -310,7 +312,8 @@ if __name__ == "__main__":
     batch_size = 8
     boards = VectorizedCliqueBoard(batch_size, 6, 3, "symmetric")
     nn = ImprovedBatchedNeuralNetwork(6, 128, 4)
-    mcts = MCTXFinalOptimized(batch_size)
+    num_sims = 20
+    mcts = MCTXFinalOptimized(batch_size, max_nodes=num_sims + 1)
     
     # Warm up
     _ = mcts.search(boards, nn, 2, 1.0)

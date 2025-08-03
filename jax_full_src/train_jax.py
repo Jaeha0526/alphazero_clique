@@ -149,10 +149,10 @@ def prepare_batch(experiences: List[Dict], batch_size: int, rng) -> Dict:
     
     # Stack into arrays
     batch = {
-        'edge_indices': jnp.stack(edge_indices),
-        'edge_features': jnp.stack(edge_features),
-        'target_policies': jnp.stack(target_policies),
-        'target_values': jnp.array(target_values).reshape(-1, 1)
+        'edge_indices': jnp.stack(edge_indices, dtype=jnp.int32),  # Must be int32 for indexing
+        'edge_features': jnp.stack(edge_features, dtype=jnp.float32),
+        'target_policies': jnp.stack(target_policies, dtype=jnp.float32),
+        'target_values': jnp.array(target_values, dtype=jnp.float32).reshape(-1, 1)
     }
     
     # Add player roles if available

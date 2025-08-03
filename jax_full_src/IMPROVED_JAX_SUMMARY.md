@@ -68,7 +68,7 @@ class ImprovedVectorizedSelfPlay:
 1. `vectorized_nn.py` - Updated with ImprovedBatchedNeuralNetwork
 2. `vectorized_mcts_improved.py` - MCTS with perspective modes
 3. `vectorized_self_play_improved.py` - Self-play with skill variation
-4. `run_jax_improved.py` - Complete pipeline with all features
+4. `run_jax_optimized.py` - Complete pipeline with all features
 5. `test_improved_components.py` - Component testing
 
 ### Updated Files
@@ -92,7 +92,7 @@ class ImprovedVectorizedSelfPlay:
 
 ## Usage Example
 ```python
-from run_jax_improved import ImprovedAlphaZeroConfig, run_improved_alphazero
+from run_jax_optimized import OptimizedSelfPlay
 
 config = ImprovedAlphaZeroConfig()
 config.game_mode = "asymmetric"

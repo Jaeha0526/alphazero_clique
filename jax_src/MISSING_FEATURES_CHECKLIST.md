@@ -12,7 +12,7 @@
 
 For the complete implementation, use:
 ```bash
-python jax_full_src/run_jax_improved.py --experiment-name my_experiment
+python jax_full_src/run_jax_optimized.py --experiment-name my_experiment
 ```
 
 ---

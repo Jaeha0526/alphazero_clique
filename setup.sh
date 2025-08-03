@@ -126,9 +126,46 @@ echo "To run the PyTorch pipeline:"
 echo "  python src/pipeline_clique.py --experiment-name my_experiment"
 echo ""
 echo "To run the JAX pipeline:"
-echo "  python jax_full_src/run_jax_improved.py --experiment-name my_experiment"
+echo "  python jax_full_src/run_jax_optimized.py --experiment-name my_experiment"
 echo ""
-echo "For JAX GPU issues, you may need to export:"
-echo "  export XLA_PYTHON_CLIENT_PREALLOCATE=false"
-echo "  export XLA_PYTHON_CLIENT_MEM_FRACTION=0.8"
+echo "For JAX GPU usage:"
+if command -v nvidia-smi &> /dev/null; then
+    # Create GPU activation script
+    cat > activate_gpu_env.sh << 'EOF'
+#!/bin/bash
+# Activate GPU environment for JAX
+
+# Detect CUDA installation
+if [ -d "/usr/local/cuda-12.8" ]; then
+    export CUDA_HOME=/usr/local/cuda-12.8
+elif [ -d "/usr/local/cuda-11.8" ]; then
+    export CUDA_HOME=/usr/local/cuda-11.8
+elif [ -d "/usr/local/cuda" ]; then
+    export CUDA_HOME=/usr/local/cuda
+else
+    echo "Warning: CUDA installation not found in standard locations"
+fi
+
+if [ ! -z "$CUDA_HOME" ]; then
+    export PATH=$CUDA_HOME/bin:$PATH
+    export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+fi
+
+export CUDA_VISIBLE_DEVICES=0
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.8
+
+echo "GPU Environment Activated:"
+echo "  CUDA_HOME: $CUDA_HOME"
+echo "  CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+echo "  XLA memory preallocation: disabled"
+echo "  XLA memory fraction: 0.8"
+EOF
+    chmod +x activate_gpu_env.sh
+    echo "  GPU detected! To use GPU with JAX, run:"
+    echo "    source activate_gpu_env.sh"
+    echo "  This script has been created for you."
+else
+    echo "  No GPU detected. JAX will run on CPU."
+fi
 echo ""

@@ -5,7 +5,7 @@
 This guide is for the experimental JAX implementation in this directory. For the recommended JAX implementation with full feature parity and JIT compilation, use:
 
 ```bash
-python jax_full_src/run_jax_improved.py --experiment-name my_experiment
+python jax_full_src/run_jax_optimized.py --experiment-name my_experiment
 ```
 
 ## Quick Start

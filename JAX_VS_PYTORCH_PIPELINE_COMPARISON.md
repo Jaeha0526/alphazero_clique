@@ -1,8 +1,8 @@
-# JAX vs PyTorch Pipeline Comparison
+# JAX vs PyTorch Pipeline Comparison (Updated August 2025)
 
 ## Overview
 
-Both pipelines implement AlphaZero, but with different approaches to parallelization and optimization.
+Both pipelines implement AlphaZero, but with different approaches to parallelization and optimization. Recent optimizations have significantly improved JAX performance.
 
 ## 1. Pipeline Structure Comparison
 
@@ -26,8 +26,10 @@ Iteration Structure:
 
 **Key characteristics:**
 - Vectorized batch processing (GPU-accelerated)
-- Parallel MCTS evaluation across games
-- JIT compilation for performance
+- Memory-optimized MCTS (90% reduction)
+- JIT-compiled training (5x speedup)
+- Optional True MCTX with JAX primitives
+- Vectorized batch preparation (10x speedup)
 - Similar plotting but simplified structure
 
 ## 2. MCTS Implementation Comparison

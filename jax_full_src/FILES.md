@@ -3,7 +3,7 @@
 ## Main Files
 
 ### Pipeline Entry Point
-- `run_jax_improved.py` - Main pipeline script with command-line interface
+- `run_jax_optimized.py` - Main pipeline script with command-line interface
 
 ### Core Implementation
 - `vectorized_board.py` - Vectorized Clique game implementation
@@ -35,7 +35,7 @@
 
 Run the pipeline with:
 ```bash
-python run_jax_improved.py --experiment-name my_experiment --iterations 10
+python run_jax_optimized.py --experiment-name my_experiment --num_iterations 10
 ```
 
 All outputs will be saved to `../experiments/my_experiment/` matching PyTorch structure.

@@ -42,5 +42,5 @@ When GPU is properly configured:
 ## Running the JAX Implementation
 Once in a proper GPU environment, simply run:
 ```bash
-python run_jax_improved.py --experiment-name my_exp --iterations 10 --self-play-games 100 --mcts-sims 50
+python run_jax_optimized.py --experiment-name my_exp --num_iterations 10 --num_episodes 100 --mcts_sims 50
 ```

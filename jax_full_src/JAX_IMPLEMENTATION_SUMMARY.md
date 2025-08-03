@@ -58,7 +58,7 @@ This is a pure JAX implementation of AlphaZero for the Clique game, achieving fe
 - `simple_tree_mcts_timed.py` - Tree MCTS with timing/profiling
 - `vectorized_self_play_fixed.py` - Self-play using proper tree MCTS
 - `train_jax.py` - Training loop with loss functions
-- `run_jax_improved.py` - Main pipeline script
+- `run_jax_optimized.py` - Main pipeline script
 - `run_jax_optimized.py` - Optimized pipeline (uses SimpleTreeMCTS)
 
 ### Testing Files
@@ -72,12 +72,12 @@ This is a pure JAX implementation of AlphaZero for the Clique game, achieving fe
 
 ### Basic Training Run
 ```bash
-python run_jax_improved.py
+python run_jax_optimized.py
 ```
 
 ### 5 Iteration Training
 ```bash
-python run_jax_improved.py \
+python run_jax_optimized.py \
     --iterations 5 \
     --self-play-games 100 \
     --mcts-sims 50 \
@@ -88,7 +88,7 @@ python run_jax_improved.py \
 
 ### With W&B Logging
 ```bash
-python run_jax_improved.py \
+python run_jax_optimized.py \
     --iterations 10 \
     --use-wandb \
     --wandb-project "my-alphazero-project"
@@ -96,7 +96,7 @@ python run_jax_improved.py \
 
 ### All Available Arguments
 ```bash
-python run_jax_improved.py --help
+python run_jax_optimized.py --help
 ```
 
 Key arguments:

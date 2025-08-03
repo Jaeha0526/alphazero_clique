@@ -4,7 +4,7 @@
 
 ```bash
 # Standard run with command-line interface (identical to PyTorch)
-python jax_full_src/run_jax_improved.py \
+python jax_full_src/run_jax_optimized.py \
     --experiment-name my_experiment \
     --iterations 10 \
     --self-play-games 100 \
@@ -23,7 +23,7 @@ This command:
 
 ```bash
 # Full example with all common options
-python jax_full_src/run_jax_improved.py \
+python jax_full_src/run_jax_optimized.py \
     --experiment-name advanced_run \
     --vertices 7 \
     --k 4 \
@@ -41,7 +41,7 @@ python jax_full_src/run_jax_improved.py \
     --eval-games 50
 
 # Minimal run for testing
-python jax_full_src/run_jax_improved.py \
+python jax_full_src/run_jax_optimized.py \
     --experiment-name test_run \
     --iterations 2 \
     --self-play-games 20 \
@@ -91,7 +91,7 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.8
 
 # Run with smaller batch size for limited memory
-python jax_full_src/run_jax_improved.py \
+python jax_full_src/run_jax_optimized.py \
     --experiment-name memory_efficient \
     --batch-size 16 \
     --mcts-sims 25
@@ -101,16 +101,16 @@ python jax_full_src/run_jax_improved.py \
 
 ```bash
 # Enable JAX debugging
-JAX_DEBUG_NANS=True python jax_full_src/run_jax_improved.py --experiment-name debug_run
+JAX_DEBUG_NANS=True python jax_full_src/run_jax_optimized.py --experiment-name debug_run
 
 # Check JAX device placement
 python -c "import jax; print(jax.devices())"
 
 # Force specific device
-CUDA_VISIBLE_DEVICES=0 JAX_PLATFORM_NAME=gpu python jax_full_src/run_jax_improved.py
+CUDA_VISIBLE_DEVICES=0 JAX_PLATFORM_NAME=gpu python jax_full_src/run_jax_optimized.py
 
 # Profile performance
-python -m cProfile -o profile.stats jax_full_src/run_jax_improved.py --iterations 1
+python -m cProfile -o profile.stats jax_full_src/run_jax_optimized.py --iterations 1
 ```
 
 ## Expected Output
@@ -191,7 +191,7 @@ python -c "import jax; print(jax.devices())"
 # Force GPU usage
 export CUDA_VISIBLE_DEVICES=0
 export JAX_PLATFORM_NAME=gpu
-python jax_full_src/run_jax_improved.py --experiment-name gpu_test
+python jax_full_src/run_jax_optimized.py --experiment-name gpu_test
 ```
 
 ### Out of Memory Errors
@@ -201,7 +201,7 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.7
 
 # Run with smaller batch
-python jax_full_src/run_jax_improved.py --batch-size 16 --mcts-sims 25
+python jax_full_src/run_jax_optimized.py --batch-size 16 --mcts-sims 25
 ```
 
 ### Slow Initial Compilation
