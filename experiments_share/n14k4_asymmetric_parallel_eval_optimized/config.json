@@ -1,0 +1,17 @@
+{
+  "num_iterations": 15,
+  "num_episodes": 150,
+  "game_batch_size": 150,
+  "training_batch_size": 64,
+  "num_epochs": 10,
+  "checkpoint_dir": "checkpoints_jax_optimized",
+  "asymmetric": true,
+  "vertices": 14,
+  "k": 4,
+  "mcts_sims": 50,
+  "experiment_name": "n14k4_asymmetric_parallel_eval_optimized",
+  "resume_from": null,
+  "use_true_mctx": true,
+  "parallel_evaluation": true,
+  "use_validation": false
+}

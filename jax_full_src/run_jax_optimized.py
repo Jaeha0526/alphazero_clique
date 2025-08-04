@@ -39,11 +39,33 @@ class OptimizedSelfPlay:
         self.config = config
         # For n=9 vertices, we have C(9,2) = 36 possible edges
         self.num_actions = config.num_vertices * (config.num_vertices - 1) // 2
+        
+        # Statistics tracking
+        self.game_statistics = {
+            'total_games': 0,
+            'attacker_wins': 0,
+            'defender_wins': 0,
+            'game_lengths': [],
+            'move_counts_per_game': [],
+            'avg_game_length': 0.0,
+            'win_ratio_attacker': 0.0,
+            'win_ratio_defender': 0.0,
+            'length_distribution': {}
+        }
     
     def play_games(self, neural_network, num_games):
         """Play games using optimized MCTS."""
         all_game_data = []
         games_played = 0
+        
+        # Reset statistics for this batch
+        batch_stats = {
+            'games_played': 0,
+            'attacker_wins': 0,
+            'defender_wins': 0,
+            'game_lengths': [],
+            'total_moves': 0
+        }
         
         while games_played < num_games:
             batch_size = min(self.config.batch_size, num_games - games_played)
@@ -151,6 +173,20 @@ class OptimizedSelfPlay:
             # Process finished games
             for i in range(batch_size):
                 winner = int(boards.winners[i])
+                game_length = len(game_data[i])
+                
+                # Update batch statistics
+                batch_stats['games_played'] += 1
+                batch_stats['game_lengths'].append(game_length)
+                batch_stats['total_moves'] += game_length
+                
+                # Track wins by role (for asymmetric games)
+                if self.config.game_mode == "asymmetric":
+                    if winner == 0:  # Attacker wins
+                        batch_stats['attacker_wins'] += 1
+                    elif winner == 1:  # Defender wins
+                        batch_stats['defender_wins'] += 1
+                
                 for move_data in game_data[i]:
                     # Perspective-based value
                     if self.config.perspective_mode == "alternating":
@@ -162,8 +198,83 @@ class OptimizedSelfPlay:
                     all_game_data.append(move_data)
             
             games_played += batch_size
+        
+        # Update overall statistics
+        self._update_statistics(batch_stats)
+        
+        # Print statistics summary
+        self._print_statistics_summary(batch_stats)
             
         return all_game_data
+    
+    def _update_statistics(self, batch_stats):
+        """Update overall game statistics."""
+        self.game_statistics['total_games'] += batch_stats['games_played']
+        self.game_statistics['attacker_wins'] += batch_stats['attacker_wins']
+        self.game_statistics['defender_wins'] += batch_stats['defender_wins']
+        self.game_statistics['game_lengths'].extend(batch_stats['game_lengths'])
+        self.game_statistics['move_counts_per_game'].extend(batch_stats['game_lengths'])
+        
+        # Calculate averages and ratios
+        total_games = self.game_statistics['total_games']
+        if total_games > 0:
+            self.game_statistics['avg_game_length'] = np.mean(self.game_statistics['game_lengths'])
+            
+            if self.config.game_mode == "asymmetric":
+                total_asym_games = self.game_statistics['attacker_wins'] + self.game_statistics['defender_wins']
+                if total_asym_games > 0:
+                    self.game_statistics['win_ratio_attacker'] = self.game_statistics['attacker_wins'] / total_asym_games
+                    self.game_statistics['win_ratio_defender'] = self.game_statistics['defender_wins'] / total_asym_games
+        
+        # Update length distribution
+        self._update_length_distribution()
+    
+    def _update_length_distribution(self):
+        """Calculate game length distribution."""
+        if not self.game_statistics['game_lengths']:
+            return
+            
+        lengths = self.game_statistics['game_lengths']
+        unique_lengths, counts = np.unique(lengths, return_counts=True)
+        
+        self.game_statistics['length_distribution'] = {
+            int(length): int(count) for length, count in zip(unique_lengths, counts)
+        }
+    
+    def _print_statistics_summary(self, batch_stats):
+        """Print summary of game statistics."""
+        print(f"\n📊 Self-Play Statistics Summary:")
+        print(f"  Games in this batch: {batch_stats['games_played']}")
+        
+        if batch_stats['game_lengths']:
+            avg_length = np.mean(batch_stats['game_lengths'])
+            min_length = min(batch_stats['game_lengths'])
+            max_length = max(batch_stats['game_lengths'])
+            print(f"  Average game length: {avg_length:.1f} moves")
+            print(f"  Game length range: {min_length} - {max_length} moves")
+        
+        if self.config.game_mode == "asymmetric":
+            total_decisive = batch_stats['attacker_wins'] + batch_stats['defender_wins']
+            if total_decisive > 0:
+                attacker_rate = batch_stats['attacker_wins'] / total_decisive
+                defender_rate = batch_stats['defender_wins'] / total_decisive
+                print(f"  Win rates - Attacker: {attacker_rate:.1%}, Defender: {defender_rate:.1%}")
+        
+        # Overall statistics
+        print(f"\n📈 Overall Statistics (Total: {self.game_statistics['total_games']} games):")
+        if self.game_statistics['total_games'] > 0:
+            print(f"  Average game length: {self.game_statistics['avg_game_length']:.1f} moves")
+            
+            if self.config.game_mode == "asymmetric":
+                print(f"  Overall win rates - Attacker: {self.game_statistics['win_ratio_attacker']:.1%}, Defender: {self.game_statistics['win_ratio_defender']:.1%}")
+            
+            # Show length distribution for recent games
+            if len(self.game_statistics['length_distribution']) <= 10:
+                print(f"  Game length distribution: {dict(sorted(self.game_statistics['length_distribution'].items()))}")
+    
+    def get_statistics(self):
+        """Get current game statistics."""
+        return self.game_statistics.copy()
 
 
 def save_checkpoint(model: ImprovedBatchedNeuralNetwork, 
@@ -428,6 +539,10 @@ def main():
         print(f"\nTraining network for {args.num_epochs} epochs...")
         start_time = time.time()
         
+        # Initialize variables for asymmetric losses
+        attacker_policy_loss = None
+        defender_policy_loss = None
+        
         # Choose training function based on validation flag
         if args.use_validation:
             print("Using training with VALIDATION SPLIT and EARLY STOPPING (like PyTorch)")
@@ -456,8 +571,8 @@ def main():
                 print("Using standard training")
                 train_fn = train_network_jax
             
-            # Train network returns (state, policy_loss, value_loss)
-            train_state, policy_loss, value_loss = train_fn(
+            # Train network - handle both symmetric and asymmetric return values
+            training_result = train_fn(
                 model,
                 game_data,
                 epochs=args.num_epochs,
@@ -466,6 +581,12 @@ def main():
                 initial_state=optimizer_state,
                 asymmetric_mode=args.asymmetric
             )
+            
+            # Unpack results based on asymmetric mode
+            if args.asymmetric and len(training_result) == 5:
+                train_state, policy_loss, value_loss, attacker_policy_loss, defender_policy_loss = training_result
+            else:
+                train_state, policy_loss, value_loss = training_result[:3]  # Handle both cases safely
         
         # Update model params and optimizer state
         model.params = train_state.params
@@ -473,7 +594,11 @@ def main():
         
         training_time = time.time() - start_time
         print(f"Training completed in {training_time:.1f}s")
-        print(f"Final losses - Policy: {policy_loss:.4f}, Value: {value_loss:.4f}")
+        # Print final losses with asymmetric breakdown if available
+        if args.asymmetric and attacker_policy_loss is not None and defender_policy_loss is not None:
+            print(f"Final losses - Policy: {policy_loss:.4f} (Attacker: {attacker_policy_loss:.4f}, Defender: {defender_policy_loss:.4f}), Value: {value_loss:.4f}")
+        else:
+            print(f"Final losses - Policy: {policy_loss:.4f}, Value: {value_loss:.4f}")
         
         # Evaluate against initial model
         eval_config = {
@@ -536,6 +661,9 @@ def main():
             str(experiment_dir / "checkpoints")
         )
         
+        # Get self-play statistics
+        selfplay_stats = self_play.get_statistics()
+        
         # Log metrics to training log
         iteration_metrics = {
             'iteration': iteration + 1,
@@ -548,8 +676,21 @@ def main():
             'validation_policy_loss': float(policy_loss),
             'validation_value_loss': float(value_loss),
             'evaluation_win_rate_vs_initial': float(win_rate_vs_initial),
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            # Self-play statistics
+            'selfplay_stats': {
+                'avg_game_length': selfplay_stats['avg_game_length'],
+                'total_games_played': selfplay_stats['total_games'],
+                'game_length_distribution': selfplay_stats['length_distribution']
+            }
         }
+        
+        # Add asymmetric training losses if available
+        if args.asymmetric:
+            if attacker_policy_loss is not None:
+                iteration_metrics['validation_attacker_policy_loss'] = float(attacker_policy_loss)
+            if defender_policy_loss is not None:
+                iteration_metrics['validation_defender_policy_loss'] = float(defender_policy_loss)
         
         # Add validation history if using validation split
         if args.use_validation and 'train_history' in locals():
@@ -561,9 +702,12 @@ def main():
                 'epochs_trained': len(train_history['train_policy_loss']),
                 'early_stopped': len(train_history['train_policy_loss']) < args.num_epochs
             }
-            if train_history['val_attacker_loss']:
+            if train_history.get('val_attacker_loss'):
                 iteration_metrics['training_history']['val_attacker_losses'] = train_history['val_attacker_loss']
                 iteration_metrics['training_history']['val_defender_losses'] = train_history['val_defender_loss']
+            if train_history.get('train_attacker_loss'):
+                iteration_metrics['training_history']['train_attacker_losses'] = train_history['train_attacker_loss']
+                iteration_metrics['training_history']['train_defender_losses'] = train_history['train_defender_loss']
         
         # Add asymmetric-specific metrics if applicable
         if args.asymmetric:
@@ -572,6 +716,13 @@ def main():
                 'defender_win_rate_vs_initial': float(defender_rate),
                 'attacker_games': eval_results['vs_initial_details']['current_attacker_games'],
                 'defender_games': eval_results['vs_initial_details']['current_defender_games']
+            })
+            # Add self-play asymmetric statistics
+            iteration_metrics['selfplay_stats'].update({
+                'selfplay_attacker_win_rate': selfplay_stats['win_ratio_attacker'],
+                'selfplay_defender_win_rate': selfplay_stats['win_ratio_defender'],
+                'selfplay_attacker_wins': selfplay_stats['attacker_wins'],
+                'selfplay_defender_wins': selfplay_stats['defender_wins']
             })
         
         # Add to training log

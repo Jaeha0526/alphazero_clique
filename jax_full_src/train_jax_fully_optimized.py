@@ -16,6 +16,8 @@ class TrainState(train_state.TrainState):
     """Custom training state with additional metrics."""
     policy_loss: float
     value_loss: float
+    attacker_policy_loss: float = 0.0
+    defender_policy_loss: float = 0.0
 
 
 # JIT-compiled train step with static arguments
@@ -75,11 +77,34 @@ def train_step_optimized(state: TrainState, batch: Dict, rng, asymmetric_mode: b
         # Combined loss
         total_loss = policy_loss + value_weight * value_loss + l2_reg
         
-        return total_loss, (policy_loss, value_loss)
+        # Compute per-role losses for asymmetric mode
+        attacker_policy_loss = 0.0
+        defender_policy_loss = 0.0
+        if asymmetric_mode and 'player_roles' in batch:
+            attacker_mask = batch['player_roles'] == 0
+            defender_mask = batch['player_roles'] == 1
+            
+            # Count samples for each role
+            attacker_count = jnp.sum(attacker_mask)
+            defender_count = jnp.sum(defender_mask)
+            
+            # Compute per-role policy losses
+            attacker_policy_loss = jnp.where(
+                attacker_count > 0,
+                jnp.sum(policy_loss_per_sample * attacker_mask) / attacker_count,
+                0.0
+            )
+            defender_policy_loss = jnp.where(
+                defender_count > 0,
+                jnp.sum(policy_loss_per_sample * defender_mask) / defender_count,
+                0.0
+            )
+        
+        return total_loss, (policy_loss, value_loss, attacker_policy_loss, defender_policy_loss)
     
     # Compute gradients
     grad_fn = grad(loss_fn, has_aux=True)
-    grads, (policy_loss, value_loss) = grad_fn(state.params)
+    grads, (policy_loss, value_loss, attacker_policy_loss, defender_policy_loss) = grad_fn(state.params)
     
     # Gradient clipping
     grad_norm = jnp.sqrt(sum(jnp.sum(g ** 2) for g in jax.tree_util.tree_leaves(grads)))
@@ -90,7 +115,12 @@ def train_step_optimized(state: TrainState, batch: Dict, rng, asymmetric_mode: b
     
     # Update parameters
     state = state.apply_gradients(grads=grads)
-    state = state.replace(policy_loss=policy_loss, value_loss=value_loss)
+    state = state.replace(
+        policy_loss=policy_loss, 
+        value_loss=value_loss,
+        attacker_policy_loss=attacker_policy_loss,
+        defender_policy_loss=defender_policy_loss
+    )
     
     return state
 
@@ -131,7 +161,7 @@ def preprocess_experiences(experiences: List[Dict]) -> Dict[str, jnp.ndarray]:
     policies_arr = np.zeros((num_exp,) + policy_shape, dtype=np.float32)
     values_arr = np.zeros((num_exp, 1), dtype=np.float32)
     
-    has_roles = 'player_role' in first_exp
+    has_roles = 'player_role' in first_exp and first_exp['player_role'] is not None
     if has_roles:
         player_roles_arr = np.zeros(num_exp, dtype=np.int32)
     
@@ -204,7 +234,9 @@ def train_network_jax_optimized(
                 params=params,
                 tx=tx,
                 policy_loss=0.0,
-                value_loss=0.0
+                value_loss=0.0,
+                attacker_policy_loss=0.0,
+                defender_policy_loss=0.0
             )
         else:
             # It's a Flax model
@@ -214,6 +246,8 @@ def train_network_jax_optimized(
     # Training metrics
     policy_losses = []
     value_losses = []
+    attacker_policy_losses = []
+    defender_policy_losses = []
     
     # Training loop
     steps_per_epoch = max(1, len(experiences) // batch_size)
@@ -236,6 +270,8 @@ def train_network_jax_optimized(
         epoch_start = time.time()
         epoch_policy_loss = 0.0
         epoch_value_loss = 0.0
+        epoch_attacker_loss = 0.0
+        epoch_defender_loss = 0.0
         
         # Shuffle indices once per epoch
         rng, shuffle_rng = jax.random.split(rng)
@@ -261,20 +297,32 @@ def train_network_jax_optimized(
             
             epoch_policy_loss += state.policy_loss
             epoch_value_loss += state.value_loss
+            epoch_attacker_loss += state.attacker_policy_loss
+            epoch_defender_loss += state.defender_policy_loss
         
         # Record epoch metrics
         avg_policy_loss = epoch_policy_loss / steps_per_epoch
         avg_value_loss = epoch_value_loss / steps_per_epoch
+        avg_attacker_loss = epoch_attacker_loss / steps_per_epoch
+        avg_defender_loss = epoch_defender_loss / steps_per_epoch
         policy_losses.append(float(avg_policy_loss))
         value_losses.append(float(avg_value_loss))
+        attacker_policy_losses.append(float(avg_attacker_loss))
+        defender_policy_losses.append(float(avg_defender_loss))
         
         epoch_time = time.time() - epoch_start
         
         if verbose and (epoch % max(1, epochs // 10) == 0 or epoch == epochs - 1):
-            print(f"Epoch {epoch+1}/{epochs} - "
-                  f"Policy Loss: {avg_policy_loss:.4f}, "
-                  f"Value Loss: {avg_value_loss:.4f}, "
-                  f"Time: {epoch_time:.2f}s")
+            if asymmetric_mode and avg_attacker_loss > 0:
+                print(f"Epoch {epoch+1}/{epochs} - "
+                      f"Policy Loss: {avg_policy_loss:.4f} (A: {avg_attacker_loss:.4f}, D: {avg_defender_loss:.4f}), "
+                      f"Value Loss: {avg_value_loss:.4f}, "
+                      f"Time: {epoch_time:.2f}s")
+            else:
+                print(f"Epoch {epoch+1}/{epochs} - "
+                      f"Policy Loss: {avg_policy_loss:.4f}, "
+                      f"Value Loss: {avg_value_loss:.4f}, "
+                      f"Time: {epoch_time:.2f}s")
     
     elapsed = time.time() - start_time
     
@@ -283,9 +331,17 @@ def train_network_jax_optimized(
         print(f"Average time per epoch: {elapsed/epochs:.2f}s")
         print(f"Average time per step: {elapsed/(epochs*steps_per_epoch)*1000:.1f}ms")
         print(f"Throughput: {len(experiences)*epochs/elapsed:.0f} samples/sec")
-        print(f"Final losses - Policy: {policy_losses[-1]:.4f}, Value: {value_losses[-1]:.4f}")
+        if asymmetric_mode and attacker_policy_losses[-1] > 0:
+            print(f"Final losses - Policy: {policy_losses[-1]:.4f} (A: {attacker_policy_losses[-1]:.4f}, D: {defender_policy_losses[-1]:.4f}), Value: {value_losses[-1]:.4f}")
+        else:
+            print(f"Final losses - Policy: {policy_losses[-1]:.4f}, Value: {value_losses[-1]:.4f}")
     
-    return state, np.mean(policy_losses), np.mean(value_losses)
+    # Return additional metrics for asymmetric mode
+    result = (state, np.mean(policy_losses), np.mean(value_losses))
+    if asymmetric_mode:
+        result = result + (np.mean(attacker_policy_losses), np.mean(defender_policy_losses))
+    
+    return result
 
 
 # Re-export save/load functions from original module

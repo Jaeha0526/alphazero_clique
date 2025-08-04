@@ -1,0 +1,17 @@
+{
+  "iteration": 4,
+  "self_play_time": 1863.6776814460754,
+  "training_time": 13.489430904388428,
+  "eval_time": 1140.7459168434143,
+  "games_per_second": 0.08048602046015335,
+  "total_examples": 7408,
+  "total_time": 3017.913029193878,
+  "validation_policy_loss": 1.46553692817688,
+  "validation_value_loss": 0.40496304631233215,
+  "evaluation_win_rate_vs_initial": 1.0,
+  "timestamp": "2025-08-03T22:36:39.261114",
+  "attacker_win_rate_vs_initial": 1.0,
+  "defender_win_rate_vs_initial": 1.0,
+  "attacker_games": 20,
+  "defender_games": 20
+}

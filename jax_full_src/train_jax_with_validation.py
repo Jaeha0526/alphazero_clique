@@ -17,6 +17,8 @@ class TrainState(train_state.TrainState):
     """Custom training state with additional metrics."""
     policy_loss: float
     value_loss: float
+    attacker_policy_loss: float = 0.0
+    defender_policy_loss: float = 0.0
 
 
 # JIT-compiled train step with static arguments
@@ -76,11 +78,34 @@ def train_step_optimized(state: TrainState, batch: Dict, rng, asymmetric_mode: b
         # Combined loss
         total_loss = policy_loss + value_weight * value_loss + l2_reg
         
-        return total_loss, (policy_loss, value_loss)
+        # Compute per-role losses for asymmetric mode
+        attacker_policy_loss = 0.0
+        defender_policy_loss = 0.0
+        if asymmetric_mode and 'player_roles' in batch:
+            attacker_mask = batch['player_roles'] == 0
+            defender_mask = batch['player_roles'] == 1
+            
+            # Count samples for each role
+            attacker_count = jnp.sum(attacker_mask)
+            defender_count = jnp.sum(defender_mask)
+            
+            # Compute per-role policy losses
+            attacker_policy_loss = jnp.where(
+                attacker_count > 0,
+                jnp.sum(policy_loss_per_sample * attacker_mask) / attacker_count,
+                0.0
+            )
+            defender_policy_loss = jnp.where(
+                defender_count > 0,
+                jnp.sum(policy_loss_per_sample * defender_mask) / defender_count,
+                0.0
+            )
+        
+        return total_loss, (policy_loss, value_loss, attacker_policy_loss, defender_policy_loss)
     
     # Compute gradients
     grad_fn = grad(loss_fn, has_aux=True)
-    grads, (policy_loss, value_loss) = grad_fn(state.params)
+    grads, (policy_loss, value_loss, attacker_policy_loss, defender_policy_loss) = grad_fn(state.params)
     
     # Gradient clipping
     grad_norm = jnp.sqrt(sum(jnp.sum(g ** 2) for g in jax.tree_util.tree_leaves(grads)))
@@ -91,7 +116,12 @@ def train_step_optimized(state: TrainState, batch: Dict, rng, asymmetric_mode: b
     
     # Update parameters
     state = state.apply_gradients(grads=grads)
-    state = state.replace(policy_loss=policy_loss, value_loss=value_loss)
+    state = state.replace(
+        policy_loss=policy_loss, 
+        value_loss=value_loss,
+        attacker_policy_loss=attacker_policy_loss,
+        defender_policy_loss=defender_policy_loss
+    )
     
     return state
 
@@ -276,7 +306,9 @@ def train_network_jax_with_validation(
                 params=params,
                 tx=tx,
                 policy_loss=0.0,
-                value_loss=0.0
+                value_loss=0.0,
+                attacker_policy_loss=0.0,
+                defender_policy_loss=0.0
             )
         else:
             # It's a Flax model
@@ -290,7 +322,9 @@ def train_network_jax_with_validation(
         'val_policy_loss': [],
         'val_value_loss': [],
         'val_attacker_loss': [],
-        'val_defender_loss': []
+        'val_defender_loss': [],
+        'train_attacker_loss': [],
+        'train_defender_loss': []
     }
     
     # Early stopping variables
@@ -322,6 +356,8 @@ def train_network_jax_with_validation(
         # Training phase
         epoch_train_policy_loss = 0.0
         epoch_train_value_loss = 0.0
+        epoch_train_attacker_loss = 0.0
+        epoch_train_defender_loss = 0.0
         
         # Shuffle training indices
         rng, shuffle_rng = jax.random.split(rng)
@@ -347,12 +383,19 @@ def train_network_jax_with_validation(
             
             epoch_train_policy_loss += state.policy_loss
             epoch_train_value_loss += state.value_loss
+            epoch_train_attacker_loss += state.attacker_policy_loss
+            epoch_train_defender_loss += state.defender_policy_loss
         
         # Average training losses
         avg_train_policy_loss = float(epoch_train_policy_loss / steps_per_epoch)
         avg_train_value_loss = float(epoch_train_value_loss / steps_per_epoch)
+        avg_train_attacker_loss = float(epoch_train_attacker_loss / steps_per_epoch)
+        avg_train_defender_loss = float(epoch_train_defender_loss / steps_per_epoch)
         history['train_policy_loss'].append(avg_train_policy_loss)
         history['train_value_loss'].append(avg_train_value_loss)
+        if asymmetric_mode:
+            history['train_attacker_loss'].append(avg_train_attacker_loss)
+            history['train_defender_loss'].append(avg_train_defender_loss)
         
         # Validation phase
         val_policy_losses = []
@@ -399,18 +442,30 @@ def train_network_jax_with_validation(
             patience_counter = 0
             
             if verbose:
-                print(f"Epoch {epoch+1}/{epochs} - "
-                      f"Train Loss: P={avg_train_policy_loss:.4f} V={avg_train_value_loss:.4f} | "
-                      f"Val Loss: P={avg_val_policy_loss:.4f} V={avg_val_value_loss:.4f} | "
-                      f"*BEST* (patience reset)")
+                if asymmetric_mode and avg_train_attacker_loss > 0:
+                    print(f"Epoch {epoch+1}/{epochs} - "
+                          f"Train Loss: P={avg_train_policy_loss:.4f} (A: {avg_train_attacker_loss:.4f}, D: {avg_train_defender_loss:.4f}) V={avg_train_value_loss:.4f} | "
+                          f"Val Loss: P={avg_val_policy_loss:.4f} V={avg_val_value_loss:.4f} | "
+                          f"*BEST* (patience reset)")
+                else:
+                    print(f"Epoch {epoch+1}/{epochs} - "
+                          f"Train Loss: P={avg_train_policy_loss:.4f} V={avg_train_value_loss:.4f} | "
+                          f"Val Loss: P={avg_val_policy_loss:.4f} V={avg_val_value_loss:.4f} | "
+                          f"*BEST* (patience reset)")
         else:
             patience_counter += 1
             
             if verbose:
-                print(f"Epoch {epoch+1}/{epochs} - "
-                      f"Train Loss: P={avg_train_policy_loss:.4f} V={avg_train_value_loss:.4f} | "
-                      f"Val Loss: P={avg_val_policy_loss:.4f} V={avg_val_value_loss:.4f} | "
-                      f"Patience: {patience_counter}/{early_stopping_patience}")
+                if asymmetric_mode and avg_train_attacker_loss > 0:
+                    print(f"Epoch {epoch+1}/{epochs} - "
+                          f"Train Loss: P={avg_train_policy_loss:.4f} (A: {avg_train_attacker_loss:.4f}, D: {avg_train_defender_loss:.4f}) V={avg_train_value_loss:.4f} | "
+                          f"Val Loss: P={avg_val_policy_loss:.4f} V={avg_val_value_loss:.4f} | "
+                          f"Patience: {patience_counter}/{early_stopping_patience}")
+                else:
+                    print(f"Epoch {epoch+1}/{epochs} - "
+                          f"Train Loss: P={avg_train_policy_loss:.4f} V={avg_train_value_loss:.4f} | "
+                          f"Val Loss: P={avg_val_policy_loss:.4f} V={avg_val_value_loss:.4f} | "
+                          f"Patience: {patience_counter}/{early_stopping_patience}")
         
         # Print asymmetric metrics if available
         if asymmetric_mode and val_attacker_losses and verbose:
@@ -457,6 +512,10 @@ def train_network_jax_with_validation(
         print(f"Average time per epoch: {elapsed/len(history['train_policy_loss']):.2f}s")
         print(f"Best validation loss achieved: {best_val_loss:.4f}")
         print(f"Final validation losses - Policy: {final_policy_loss:.4f}, Value: {final_value_loss:.4f}")
+        if asymmetric_mode and history['train_attacker_loss']:
+            final_attacker_loss = history['train_attacker_loss'][-1] if history['train_attacker_loss'] else 0.0
+            final_defender_loss = history['train_defender_loss'][-1] if history['train_defender_loss'] else 0.0
+            print(f"Final asymmetric losses - Attacker: {final_attacker_loss:.4f}, Defender: {final_defender_loss:.4f}")
     
     return state, final_policy_loss, final_value_loss, history
 
