@@ -437,8 +437,8 @@ def main():
     
     print(f"Starting AlphaZero with args: {args}")
     
-    # Set up experiment directory
-    experiments_dir = Path("/workspace/alphazero_clique/experiments")
+    # Set up experiment directory (relative to current working directory)
+    experiments_dir = Path("./experiments")
     experiment_dir = experiments_dir / args.experiment_name
     experiment_dir.mkdir(parents=True, exist_ok=True)
     

@@ -281,12 +281,11 @@ We have developed a **pure JAX** implementation with an optimized MCTX (Monte Ca
 ### Quick Start with JAX
 
 ```bash
-# Setup JAX environment (run from jax_full_src directory)
-cd jax_full_src
-./setup_gpu_env.sh
+# Setup JAX environment (run from root directory)
+./setup.sh
 
-# Run the JAX pipeline with all optimizations
-python run_jax_optimized.py \
+# Run the JAX pipeline with all optimizations (from root directory)
+python jax_full_src/run_jax_optimized.py \
     --experiment_name my_jax_exp \
     --num_iterations 10 \
     --num_episodes 100 \

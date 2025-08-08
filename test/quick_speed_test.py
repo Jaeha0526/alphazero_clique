@@ -11,8 +11,8 @@ import numpy as np
 from datetime import datetime
 
 # Add paths for imports
-sys.path.append('/workspace/alphazero_clique/src')
-sys.path.append('/workspace/alphazero_clique/jax_full_src')
+sys.path.append('src')
+sys.path.append('jax_full_src')
 
 def test_pytorch_core():
     """Test PyTorch core operations"""

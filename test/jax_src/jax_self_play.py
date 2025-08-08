@@ -350,7 +350,7 @@ def compare_with_original_self_play():
     parallel_self_play = ParallelSelfPlay(config, model, model_params, num_processes=4)
     
     start = time.time()
-    save_path = parallel_self_play.generate_games(100, "/tmp/jax_selfplay_test", iteration=0)
+    save_path = parallel_self_play.generate_games(100, "./temp/jax_selfplay_test", iteration=0)
     parallel_time = time.time() - start
     
     print(f"Total time: {parallel_time:.2f}s")

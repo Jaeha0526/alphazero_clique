@@ -12,8 +12,8 @@ import json
 from datetime import datetime
 
 # Add paths for imports
-sys.path.append('/workspace/alphazero_clique/src')
-sys.path.append('/workspace/alphazero_clique/jax_full_src')
+sys.path.append('src')
+sys.path.append('jax_full_src')
 
 def test_pytorch_mcts():
     """Test PyTorch MCTS speed"""
@@ -191,7 +191,7 @@ def run_mini_pipeline_test():
     # PyTorch mini pipeline
     print("\n1. PyTorch Pipeline:")
     cmd = [
-        "python", "/workspace/alphazero_clique/src/pipeline_clique.py",
+        "python", "src/pipeline_clique.py",
         "--mode", "pipeline",
         "--vertices", "6",
         "--k", "3",
@@ -223,7 +223,7 @@ def run_mini_pipeline_test():
     env["JAX_PLATFORMS"] = "cpu"
     
     cmd = [
-        "python", "/workspace/alphazero_clique/jax_full_src/run_jax_optimized.py",
+        "python", "jax_full_src/run_jax_optimized.py",
         "--num_iterations", "1",
         "--num_episodes", str(config["games"]),
         "--game_batch_size", str(config["games"]),
@@ -311,7 +311,7 @@ def main():
         print(f"  Speedup: {pipeline_results['speedup']:.1f}x")
     
     # Save results
-    output_file = "/workspace/alphazero_clique/test/speed_comparison_results.json"
+    output_file = "test/speed_comparison_results.json"
     with open(output_file, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\n📝 Results saved to {output_file}")

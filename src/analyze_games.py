@@ -26,9 +26,7 @@ b.move_piece(act[0][0],act[1][0],act[2][0])
 for i in range(len(dataset)):
     board = ed.decode_board(dataset[i][0])
     fig = vb(board.current_board)
-    plt.savefig(os.path.join("C:/Users/WT/Desktop/Python_Projects/chess/chess_ai_py35updated/gamesimages/ex4/", \
-                             f"{file}_{i}.png"))
+    plt.savefig(os.path.join("./game_images/", f"{file}_{i}.png"))
     
 fig = vb(b.current_board)
-plt.savefig(os.path.join("C:/Users/WT/Desktop/Python_Projects/chess/chess_ai_py35updated/gamesimages/ex4/", \
-                             f"{file}_{i+1}.png"))
+plt.savefig(os.path.join("./game_images/", f"{file}_{i+1}.png"))
