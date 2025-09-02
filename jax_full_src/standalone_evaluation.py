@@ -15,6 +15,7 @@ from typing import Dict, Optional
 from vectorized_nn import ImprovedBatchedNeuralNetwork
 from evaluation_jax_parallel import evaluate_models_parallel
 from evaluation_jax_truly_parallel import evaluate_vs_initial_and_best_truly_parallel
+from evaluation_subprocess import evaluate_models_subprocess_parallel
 
 
 def load_model(checkpoint_path: str, device=None) -> ImprovedBatchedNeuralNetwork:
@@ -106,18 +107,36 @@ def evaluate_two_models(model1_path: str, model2_path: str,
     print(f"\nEvaluating {model1_path} vs {model2_path}")
     print(f"Games: {config['num_games']}, MCTS sims: {config['mcts_sims']}")
     
-    results = evaluate_models_parallel(
-        model1=model1,
-        model2=model2,
-        num_games=config['num_games'],
-        num_vertices=config['num_vertices'],
-        k=config['k'],
-        mcts_sims=config['mcts_sims'],
-        c_puct=config.get('c_puct', 3.0),
-        temperature=0.0,
-        game_mode=config.get('game_mode', 'symmetric'),
-        python_eval=config.get('python_eval', True)  # Default to Python MCTS
-    )
+    # Use subprocess parallelization if requested
+    if config.get('subprocess', False):
+        print(f"Using subprocess parallel evaluation with {config.get('num_cpus', 4)} CPUs")
+        results = evaluate_models_subprocess_parallel(
+            model1_path=model1_path,
+            model2_path=model2_path,
+            num_games=config['num_games'],
+            num_cpus=config.get('num_cpus', 4),
+            config={
+                'num_vertices': config['num_vertices'],
+                'k': config['k'],
+                'mcts_sims': config['mcts_sims'],
+                'c_puct': config.get('c_puct', 3.0),
+                'game_mode': config.get('game_mode', 'symmetric'),
+                'python_eval': config.get('python_eval', True)
+            }
+        )
+    else:
+        results = evaluate_models_parallel(
+            model1=model1,
+            model2=model2,
+            num_games=config['num_games'],
+            num_vertices=config['num_vertices'],
+            k=config['k'],
+            mcts_sims=config['mcts_sims'],
+            c_puct=config.get('c_puct', 3.0),
+            temperature=0.0,
+            game_mode=config.get('game_mode', 'symmetric'),
+            python_eval=config.get('python_eval', True)  # Default to Python MCTS
+        )
     
     return results
 
@@ -138,8 +157,38 @@ def evaluate_vs_initial_and_best(current_path: str,
     if best_path:
         print(f"  vs best: {best_path}")
     
+    # Use subprocess parallelization if requested
+    if config.get('subprocess', False):
+        print(f"Using subprocess parallel evaluation with {config.get('num_cpus', 4)} CPUs")
+        # Evaluate vs initial
+        initial_results = evaluate_models_subprocess_parallel(
+            model1_path=current_path,
+            model2_path=initial_path,
+            num_games=config['num_games'],
+            num_cpus=config.get('num_cpus', 4),
+            config=config
+        )
+        results = {
+            'win_rate_vs_initial': initial_results['model1_win_rate'],
+            'eval_time_vs_initial': initial_results['eval_time']
+        }
+        
+        # Evaluate vs best if provided
+        if best_model:
+            best_results = evaluate_models_subprocess_parallel(
+                model1_path=current_path,
+                model2_path=best_path,
+                num_games=config['num_games'],
+                num_cpus=config.get('num_cpus', 4),
+                config=config
+            )
+            results['win_rate_vs_best'] = best_results['model1_win_rate']
+            results['eval_time_vs_best'] = best_results['eval_time']
+        else:
+            results['win_rate_vs_best'] = -1
+            results['eval_time_vs_best'] = 0
     # Use truly parallel evaluation if best model provided
-    if best_model and config.get('truly_parallel', False):
+    elif best_model and config.get('truly_parallel', False):
         results = evaluate_vs_initial_and_best_truly_parallel(
             current_model=current_model,
             initial_model=initial_model,
@@ -191,7 +240,7 @@ def main():
     parser = argparse.ArgumentParser(description='Standalone model evaluation')
     
     # Model paths
-    parser.add_argument('--current', type=str, required=True,
+    parser.add_argument('--current', type=str, default=None,
                        help='Path to current model checkpoint')
     parser.add_argument('--initial', type=str, default=None,
                        help='Path to initial model (for comparison)')
@@ -228,6 +277,10 @@ def main():
                        help='Use JAX MCTS (may compile)')
     parser.add_argument('--truly_parallel', action='store_true',
                        help='Use truly parallel evaluation')
+    parser.add_argument('--subprocess', action='store_true',
+                       help='Use subprocess parallelization for CPU-based evaluation')
+    parser.add_argument('--num_cpus', type=int, default=4,
+                       help='Number of CPUs for parallel evaluation')
     
     # Experiment directory shortcut
     parser.add_argument('--experiment', type=str, default=None,
@@ -293,7 +346,9 @@ def main():
         'game_mode': args.game_mode,
         'python_eval': args.python_eval and not args.use_jax,
         'use_true_mctx': args.use_jax and not args.python_eval,
-        'truly_parallel': args.truly_parallel
+        'truly_parallel': args.truly_parallel,
+        'subprocess': args.subprocess,
+        'num_cpus': args.num_cpus
     }
     
     print("="*60)
