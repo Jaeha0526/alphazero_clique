@@ -302,14 +302,37 @@ python jax_full_src/run_jax_optimized.py \
     --k 3 \
     --eval_games 21 \
     --eval_mcts_sims 30 \
-    --use_true_mctx \  # 5x faster MCTS (causes compilation overhead)
-    --parallel_evaluation  # All eval games in single batch
+    --use_true_mctx  # Optional: 5x faster MCTS (causes compilation overhead)
 
 # Resume from checkpoint
 python jax_full_src/run_jax_optimized.py \
     --resume_from experiments/my_jax_exp/checkpoints/checkpoint_iter_5.pkl \
     --experiment_name my_jax_exp \
     # ... same other parameters
+
+# CPU-optimized evaluation with subprocess parallelization
+python jax_full_src/run_jax_optimized.py \
+    --experiment_name cpu_optimized \
+    --subprocess_eval \
+    --eval_num_cpus 8 \
+    --python_eval \
+    --eval_games 100 \
+    --eval_mcts_sims 50 \
+    # ... other parameters
+
+# GPU-optimized with parallel evaluation
+python jax_full_src/run_jax_optimized.py \
+    --experiment_name gpu_optimized \
+    --parallel_evaluation \
+    --use_true_mctx \
+    --eval_games 100 \
+    # ... other parameters
+
+# Standalone evaluation of saved models
+python jax_full_src/standalone_evaluation.py \
+    --experiment my_experiment \
+    --subprocess --num_cpus 8 \
+    --num_games 100 --mcts_sims 50
 ```
 
 This will:
@@ -325,6 +348,22 @@ This will:
 - **Memory-Optimized MCTX**: Dynamic node allocation based on simulation count
 - **JIT-Compiled Training**: Full training step compiled for GPU execution
 - **True MCTX Option**: Pure JAX primitives implementation (same sequential MCTS, just faster)
+
+#### Evaluation Options
+The JAX implementation provides multiple evaluation strategies during training:
+
+1. **Skip Evaluation** (`--skip_evaluation`): Skip evaluation for quick iterations
+2. **Default**: Sequential evaluation with vectorized batches
+3. **Parallel Evaluation** (`--parallel_evaluation`): All games in single batch (GPU-friendly)
+4. **Subprocess Evaluation** (`--subprocess_eval`): CPU multiprocessing via separate processes
+   - Use with `--eval_num_cpus N` to control parallelization
+   - Recommended with `--python_eval` to avoid JAX compilation
+5. **Python MCTS** (`--python_eval`): Use Python MCTS instead of JAX (avoids compilation overhead)
+
+All evaluation modes respect:
+- `--eval_games`: Number of evaluation games (default: 21)
+- `--eval_mcts_sims`: MCTS simulations per move (default: 30)
+- Game mode from training (symmetric/asymmetric/avoid_clique)
 - **Vectorized Operations**: Batch preparation and processing fully vectorized
 - **Pure JAX**: No PyTorch dependencies - everything runs in JAX
 - **Scalable Performance**: Optimal for different game sizes (n,k)
