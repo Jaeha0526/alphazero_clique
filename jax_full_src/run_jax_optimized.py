@@ -628,8 +628,9 @@ def main():
         
         # Save game data every 5 iterations for analysis
         if iteration % 5 == 0:
-            game_data_dir = os.path.join('experiments', args.experiment_name)
-            game_data_path = os.path.join(game_data_dir, f'game_data_iter_{iteration}.pkl')
+            game_data_dir = experiment_dir / "game_data"
+            game_data_dir.mkdir(parents=True, exist_ok=True)
+            game_data_path = game_data_dir / f'iteration_{iteration}.pkl'
             print(f"\n💾 Saving game data to {game_data_path}")
             
             # Convert flat list of moves to structured game data

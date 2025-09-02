@@ -586,10 +586,11 @@ The JAX implementation automatically saves sample game data every 5 iterations f
 Game data is saved at iterations 0, 5, 10, 15, etc. in the experiment directory:
 ```
 experiments/your_experiment/
-├── game_data_iter_0.pkl    # Initial random play
-├── game_data_iter_5.pkl    # After 5 iterations
-├── game_data_iter_10.pkl   # After 10 iterations
-└── ...
+├── game_data/
+│   ├── iteration_0.pkl     # Initial random play
+│   ├── iteration_5.pkl     # After 5 iterations
+│   ├── iteration_10.pkl    # After 10 iterations
+│   └── ...
 ```
 
 Each file contains:
@@ -606,10 +607,10 @@ Use the included analysis script to examine learning progress:
 
 ```bash
 # Analyze a single iteration
-python jax_full_src/analyze_game_data.py experiments/your_experiment/game_data_iter_10.pkl
+python jax_full_src/analyze_game_data.py experiments/your_experiment/game_data/iteration_10.pkl
 
 # Compare across all iterations to track learning
-python jax_full_src/analyze_game_data.py experiments/your_experiment/ --compare
+python jax_full_src/analyze_game_data.py experiments/your_experiment/game_data/ --compare
 ```
 
 The analysis shows:

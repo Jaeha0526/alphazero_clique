@@ -77,7 +77,7 @@ def analyze_game_file(filepath):
 
 def compare_iterations(experiment_dir):
     """Compare game data across multiple iterations."""
-    pattern = "game_data_iter_*.pkl"
+    pattern = "iteration_*.pkl"
     files = sorted(Path(experiment_dir).glob(pattern))
     
     if not files:
@@ -171,9 +171,13 @@ def main():
         if args.compare:
             compare_iterations(args.path)
         else:
-            # Analyze all game data files in directory
-            pattern = "game_data_iter_*.pkl"
+            # Analyze all game data files in directory (try both patterns)
+            pattern = "iteration_*.pkl"
             files = sorted(Path(args.path).glob(pattern))
+            if not files:
+                # Try old pattern for backward compatibility
+                pattern = "game_data_iter_*.pkl"
+                files = sorted(Path(args.path).glob(pattern))
             for filepath in files:
                 analyze_game_file(filepath)
     else:
