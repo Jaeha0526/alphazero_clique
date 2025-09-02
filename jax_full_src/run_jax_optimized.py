@@ -28,8 +28,9 @@ from train_jax_fully_optimized import train_network_jax_optimized
 from train_jax_with_validation import train_network_jax_with_validation
 from evaluation_jax_fixed import evaluate_vs_initial_and_best
 from evaluation_jax_asymmetric import evaluate_vs_initial_and_best_asymmetric
-from evaluation_jax_parallel import evaluate_vs_initial_and_best_parallel
+from evaluation_jax_parallel import evaluate_vs_initial_and_best_parallel, evaluate_models_parallel
 from evaluation_jax_asymmetric_parallel import evaluate_vs_initial_and_best_asymmetric_parallel
+from evaluation_subprocess import evaluate_models_subprocess_parallel
 from ramsey_counterexample_saver import RamseyCounterexampleSaver
 
 
@@ -468,6 +469,10 @@ def main():
                         help='Use Python MCTS for evaluation (avoids JAX compilation overhead)')
     parser.add_argument('--skip_evaluation', action='store_true',
                         help='Skip evaluation during training (useful for quick iterations)')
+    parser.add_argument('--subprocess_eval', action='store_true',
+                        help='Use subprocess parallelization for evaluation')
+    parser.add_argument('--eval_num_cpus', type=int, default=4,
+                        help='Number of CPUs for subprocess evaluation')
     
     args = parser.parse_args()
     
@@ -734,11 +739,105 @@ def main():
             print(f"  As Attacker: {attacker_rate:.1%}")
             print(f"  As Defender: {defender_rate:.1%}")
         else:
-            if args.parallel_evaluation:
+            if args.subprocess_eval:
+                # Use subprocess parallelization for evaluation
+                print(f"Using SUBPROCESS evaluation with {args.eval_num_cpus} CPUs")
+                
+                # Save current model to temp checkpoint for subprocess evaluation
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as tmp_current:
+                    current_checkpoint = {
+                        'params': model.params,
+                        'model_config': {
+                            'num_vertices': model.num_vertices,
+                            'hidden_dim': model.hidden_dim,
+                            'num_gnn_layers': model.num_layers,
+                            'asymmetric_mode': model.asymmetric_mode
+                        }
+                    }
+                    with open(tmp_current.name, 'wb') as f:
+                        pickle.dump(current_checkpoint, f)
+                    current_path = tmp_current.name
+                
+                # Save initial model to temp checkpoint
+                with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as tmp_initial:
+                    initial_checkpoint = {
+                        'params': initial_model.params,
+                        'model_config': {
+                            'num_vertices': initial_model.num_vertices,
+                            'hidden_dim': initial_model.hidden_dim,
+                            'num_gnn_layers': initial_model.num_layers,
+                            'asymmetric_mode': initial_model.asymmetric_mode
+                        }
+                    }
+                    with open(tmp_initial.name, 'wb') as f:
+                        pickle.dump(initial_checkpoint, f)
+                    initial_path = tmp_initial.name
+                
+                # Evaluate vs initial
+                initial_results = evaluate_models_subprocess_parallel(
+                    model1_path=current_path,
+                    model2_path=initial_path,
+                    num_games=eval_config['num_games'],
+                    num_cpus=args.eval_num_cpus,
+                    config=eval_config
+                )
+                
+                # Build results dict
+                eval_results = {
+                    'win_rate_vs_initial': initial_results['model1_win_rate'],
+                    'draw_rate_vs_initial': initial_results.get('draw_rate', 0),
+                    'eval_time_vs_initial': initial_results['eval_time'],
+                    'vs_initial_details': initial_results
+                }
+                
+                # Evaluate vs best if not first iteration
+                if iteration > 0 and best_model is not None:
+                    # Save best model to temp checkpoint
+                    with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as tmp_best:
+                        best_checkpoint = {
+                            'params': best_model.params,
+                            'model_config': {
+                                'num_vertices': best_model.num_vertices,
+                                'hidden_dim': best_model.hidden_dim,
+                                'num_gnn_layers': best_model.num_layers,
+                                'asymmetric_mode': best_model.asymmetric_mode
+                            }
+                        }
+                        with open(tmp_best.name, 'wb') as f:
+                            pickle.dump(best_checkpoint, f)
+                        best_path = tmp_best.name
+                    
+                    # Evaluate vs best
+                    best_results = evaluate_models_subprocess_parallel(
+                        model1_path=current_path,
+                        model2_path=best_path,
+                        num_games=eval_config['num_games'],
+                        num_cpus=args.eval_num_cpus,
+                        config=eval_config
+                    )
+                    
+                    eval_results['win_rate_vs_best'] = best_results['model1_win_rate']
+                    eval_results['draw_rate_vs_best'] = best_results.get('draw_rate', 0)
+                    eval_results['eval_time_vs_best'] = best_results['eval_time']
+                    eval_results['vs_best_details'] = best_results
+                    
+                    # Clean up temp file
+                    os.unlink(best_path)
+                else:
+                    eval_results['win_rate_vs_best'] = -1
+                    eval_results['draw_rate_vs_best'] = -1
+                    eval_results['eval_time_vs_best'] = 0
+                    eval_results['vs_best_details'] = None
+                
+                # Clean up temp files
+                os.unlink(current_path)
+                os.unlink(initial_path)
+                
+            elif args.parallel_evaluation:
                 # First iteration: only evaluate vs initial
                 if iteration == 0:
                     print("Using PARALLEL evaluation (first iteration - vs initial only)")
-                    from evaluation_jax_parallel import evaluate_models_parallel
                     eval_results_raw = evaluate_models_parallel(
                         model1=model,
                         model2=initial_model,
