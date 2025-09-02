@@ -244,6 +244,20 @@ def main():
             print(f"Experiment directory {exp_dir} not found!")
             return
         
+        # Try to load training config to get game mode
+        training_log = exp_dir / "training_log.json"
+        if training_log.exists() and args.game_mode == 'symmetric':  # Only override if not explicitly set
+            try:
+                import json
+                with open(training_log, 'r') as f:
+                    log_data = json.load(f)
+                    if log_data and 'config' in log_data[0]:
+                        config_game_mode = log_data[0]['config'].get('game_mode', 'symmetric')
+                        args.game_mode = config_game_mode
+                        print(f"Auto-detected game mode from training: {config_game_mode}")
+            except:
+                pass  # If we can't load, just use the default
+        
         # Find models
         if args.iteration:
             args.current = str(exp_dir / f"checkpoints/checkpoint_iter_{args.iteration}.pkl")

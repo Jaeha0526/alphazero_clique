@@ -824,6 +824,12 @@ def main():
         # Log metrics to training log
         iteration_metrics = {
             'iteration': iteration + 1,
+            'config': {
+                'game_mode': config.game_mode,
+                'num_vertices': config.num_vertices,
+                'k': config.k,
+                'mcts_sims': config.mcts_simulations,
+            },
             'self_play_time': self_play_time,
             'training_time': training_time,
             'eval_time': eval_time,
