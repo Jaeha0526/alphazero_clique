@@ -8,6 +8,7 @@ import subprocess
 import pickle
 import json
 import tempfile
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 import time
@@ -143,8 +144,12 @@ def evaluate_models_subprocess_parallel(
                 with open(worker_script, 'w') as f:
                     f.write(f"""
 import os
-os.environ['JAX_PLATFORMS'] = 'cpu'  # Force CPU only for subprocess
-os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Hide GPU from subprocess
+# Completely disable CUDA for subprocess workers
+os.environ['JAX_PLATFORMS'] = 'cpu'  # Force CPU only
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable CUDA completely
+os.environ['JAX_ENABLE_X64'] = 'False'  # Use 32-bit for memory efficiency
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'  # Don't preallocate memory
+os.environ['JAX_DISABLE_JIT'] = 'False'  # Keep JIT for CPU performance
 
 import pickle
 import sys
@@ -180,13 +185,18 @@ with open('{output_file}', 'wb') as f:
 print(f"Worker {i}: Completed {{results['model1_wins']}}-{{results['model2_wins']}}-{{results['draws']}}")
 """)
                 
-                # Start subprocess
+                # Start subprocess with environment variables
                 print(f"  Starting worker {i}: {worker_games} games")
+                env = os.environ.copy()
+                env['JAX_PLATFORMS'] = 'cpu'
+                env['CUDA_VISIBLE_DEVICES'] = '-1'
+                env['OMP_NUM_THREADS'] = '1'  # Limit threads per process
                 proc = subprocess.Popen(
                     ['python', str(worker_script)],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True
+                    text=True,
+                    env=env
                 )
                 processes.append((i, proc))
         
