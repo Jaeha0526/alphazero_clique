@@ -100,7 +100,12 @@ def evaluate_vs_initial_and_best_truly_parallel(
     
     # Create MCTS instances
     num_actions = num_vertices * (num_vertices - 1) // 2
-    use_true_mctx = config.get('use_true_mctx', True)
+    # Check if we should force Python MCTS for evaluation
+    python_eval = config.get('python_eval', False)
+    use_true_mctx = False if python_eval else config.get('use_true_mctx', True)
+    
+    if python_eval:
+        print("  Using Python MCTS for evaluation (no compilation overhead)")
     
     if use_true_mctx:
         mcts_current = MCTXTrueJAX(

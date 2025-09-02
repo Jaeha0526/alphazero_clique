@@ -54,7 +54,8 @@ def evaluate_vs_initial_and_best_parallel(
         mcts_sims=mcts_sims,
         c_puct=c_puct,
         temperature=temperature,
-        game_mode=config.get('game_mode', 'symmetric')
+        game_mode=config.get('game_mode', 'symmetric'),
+        python_eval=config.get('python_eval', False)
     )
     
     results = {
@@ -75,7 +76,8 @@ def evaluate_vs_initial_and_best_parallel(
             mcts_sims=mcts_sims,
             c_puct=c_puct,
             temperature=temperature,
-            game_mode=config.get('game_mode', 'symmetric')
+            game_mode=config.get('game_mode', 'symmetric'),
+            python_eval=config.get('python_eval', False)
         )
         
         results.update({
@@ -107,7 +109,8 @@ def evaluate_models_parallel(
     mcts_sims: int = 30,
     c_puct: float = 3.0,
     temperature: float = 0.0,
-    game_mode: str = 'symmetric'
+    game_mode: str = 'symmetric',
+    python_eval: bool = False
 ) -> Dict[str, float]:
     """
     Evaluate two models against each other in parallel.
@@ -134,8 +137,11 @@ def evaluate_models_parallel(
     # Create MCTS instances for both models
     num_actions = num_vertices * (num_vertices - 1) // 2
     
-    # Use True MCTX for maximum speed (same as self-play)
-    use_true_mctx = True  # Always use the fastest version
+    # Check if we should force Python MCTS for evaluation
+    use_true_mctx = not python_eval  # Use Python if python_eval is True
+    
+    if python_eval:
+        print("  Using Python MCTS for evaluation (no compilation overhead)")
     
     if use_true_mctx:
         mcts1 = MCTXTrueJAX(

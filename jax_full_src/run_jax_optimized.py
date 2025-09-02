@@ -464,6 +464,10 @@ def main():
                         help='Number of evaluation games (default: 21 for symmetric, 40 for asymmetric)')
     parser.add_argument('--eval_mcts_sims', type=int, default=None,
                         help='MCTS simulations for evaluation (default: 30)')
+    parser.add_argument('--python_eval', action='store_true',
+                        help='Use Python MCTS for evaluation (avoids JAX compilation overhead)')
+    parser.add_argument('--skip_evaluation', action='store_true',
+                        help='Skip evaluation during training (useful for quick iterations)')
     
     args = parser.parse_args()
     
@@ -682,14 +686,26 @@ def main():
         else:
             print(f"Final losses - Policy: {policy_loss:.4f}, Value: {value_loss:.4f}")
         
-        # Evaluate against initial model with command-line overrides
-        eval_config = {
+        # Skip evaluation if requested
+        if args.skip_evaluation:
+            print("\nSkipping evaluation (--skip_evaluation flag set)")
+            win_rate_vs_initial = -1
+            win_rate_vs_best = -1
+            eval_time = 0
+            attacker_rate = -1
+            defender_rate = -1
+            eval_results = {'win_rate_vs_initial': -1, 'win_rate_vs_best': -1}
+        else:
+            # Evaluate against initial model with command-line overrides
+            eval_config = {
             'num_games': args.eval_games if args.eval_games else (40 if args.asymmetric else 21),
             'num_vertices': args.vertices,
             'k': args.k,
             'game_mode': config.game_mode,  # Use the game_mode from config
             'mcts_sims': args.eval_mcts_sims if args.eval_mcts_sims else 30,
-            'c_puct': 3.0
+            'c_puct': 3.0,
+            'use_true_mctx': False if args.python_eval else config.use_true_mctx,  # Override for evaluation
+            'python_eval': args.python_eval  # Pass the flag
         }
         
         # Use enhanced evaluation for asymmetric games
@@ -732,7 +748,8 @@ def main():
                         mcts_sims=eval_config['mcts_sims'],
                         c_puct=eval_config['c_puct'],
                         temperature=0.0,
-                        game_mode=eval_config['game_mode']
+                        game_mode=eval_config['game_mode'],
+                        python_eval=eval_config.get('python_eval', False)
                     )
                     eval_results = {
                         'win_rate_vs_initial': eval_results_raw['model1_win_rate'],
@@ -763,12 +780,14 @@ def main():
                 )
             win_rate_vs_initial = eval_results['win_rate_vs_initial']
             eval_time = eval_results['eval_time_vs_initial']
+            
+            # Extract win rate vs best
+            win_rate_vs_best = eval_results.get('win_rate_vs_best', -1)
         
-        # Extract win rate vs best
-        win_rate_vs_best = eval_results.get('win_rate_vs_best', -1)
-        
-        # Model selection: update best model if current beats it
-        if iteration == 0:
+        # Model selection: update best model if current beats it (skip if evaluation was skipped)
+        if args.skip_evaluation:
+            print("\nSkipping best model update (evaluation was skipped)")
+        elif iteration == 0:
             # First iteration: automatically make it the best model
             print(f"\n🎯 First iteration: Setting trained model as initial best")
             best_model.params = model.params
