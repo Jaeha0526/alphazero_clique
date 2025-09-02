@@ -69,6 +69,12 @@ python src/visualize_clique.py
 
 # Analyze training results
 python src/analyze_games.py
+
+# Analyze JAX training game data (saved every 5 iterations)
+python jax_full_src/analyze_game_data.py experiments/your_experiment/game_data_iter_10.pkl
+
+# Compare learning progress across iterations
+python jax_full_src/analyze_game_data.py experiments/your_experiment/ --compare
 ```
 
 ## High-Level Architecture
@@ -146,6 +152,9 @@ python src/analyze_games.py
 - Results stored in `/experiments/<experiment_name>/`
 - Models saved as `clique_net.pth.tar` (best) and `clique_net_iter{N}.pth.tar`
 - Training logs in `training_log.json`
+- **Game data saved every 5 iterations** (`game_data_iter_0.pkl`, `game_data_iter_5.pkl`, etc.)
+  - Contains sample games with move-by-move data for analysis
+  - Use `analyze_game_data.py` to track learning progress
 - Optional Weights & Biases integration for tracking
 
 ## Important Implementation Notes
