@@ -142,6 +142,10 @@ def evaluate_models_subprocess_parallel(
                 worker_script = tmpdir / f'worker_{i}.py'
                 with open(worker_script, 'w') as f:
                     f.write(f"""
+import os
+os.environ['JAX_PLATFORMS'] = 'cpu'  # Force CPU only for subprocess
+os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Hide GPU from subprocess
+
 import pickle
 import sys
 sys.path.append('/workspace/alphazero_clique/jax_full_src')
