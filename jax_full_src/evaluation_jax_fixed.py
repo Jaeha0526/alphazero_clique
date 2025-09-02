@@ -12,6 +12,7 @@ from mctx_final_optimized import MCTXFinalOptimized
 from mctx_true_jax import MCTXTrueJAX
 from vectorized_nn import ImprovedBatchedNeuralNetwork
 import time
+from ramsey_counterexample_saver import RamseyCounterexampleSaver
 
 
 def evaluate_models_jax(
@@ -51,6 +52,11 @@ def evaluate_models_jax(
     current_wins = 0
     baseline_wins = 0
     draws = 0
+    
+    # Initialize Ramsey saver if in avoid_clique mode
+    ramsey_saver = None
+    if game_mode == "avoid_clique":
+        ramsey_saver = RamseyCounterexampleSaver()
     
     # Create MCTS instances
     num_actions = num_vertices * (num_vertices - 1) // 2
@@ -133,21 +139,15 @@ def evaluate_models_jax(
                     temperature
                 )
             
-            # Select action
+            # Select action based on MCTS visit counts
+            # For evaluation, just pick the most visited action (like PyTorch)
             valid_mask = board.get_valid_moves_mask()
             masked_probs = action_probs[0] * valid_mask[0]
             
             # Ensure we have valid probabilities
             if jnp.sum(masked_probs) > 0:
-                if temperature == 0:
-                    # Deterministic: choose highest probability
-                    action = jnp.argmax(masked_probs)
-                else:
-                    # Sample from distribution
-                    action = jax.random.categorical(
-                        jax.random.PRNGKey(game_idx * 1000 + move_count),
-                        jnp.log(masked_probs + 1e-8)
-                    )
+                # Simply take the action with highest probability (most visits)
+                action = jnp.argmax(masked_probs)
             else:
                 # No valid moves (shouldn't happen)
                 break
@@ -166,6 +166,16 @@ def evaluate_models_jax(
             draws += 1
             if verbose:
                 print(f"  Game {game_idx+1}: Draw")
+            
+            # Save Ramsey counterexample if in avoid_clique mode
+            if ramsey_saver is not None and game_state == 3:
+                ramsey_saver.save_counterexample(
+                    edge_states=board.edge_states[0],
+                    num_vertices=num_vertices,
+                    k=k,
+                    source="evaluation",
+                    game_idx=game_idx
+                )
         elif game_state == 1:  # Player 1 wins
             if current_starts:
                 current_wins += 1

@@ -33,19 +33,30 @@ python src/pipeline_clique.py --mode evaluate \
     --num-games 21 --eval-mcts-sims 30
 ```
 
-### JAX Version (Experimental/GPU)
+### JAX Version (GPU-Optimized)
 ```bash
 # Install JAX dependencies
 pip install -r requirements_jax.txt
 
-# Run JAX pipeline with optimizations
+# Run JAX pipeline with all optimizations
 cd jax_full_src
 python run_jax_optimized.py \
     --experiment_name my_jax_exp \
     --num_iterations 10 --num_episodes 100 \
     --mcts_sims 50 --game_batch_size 32 \
+    --training_batch_size 256 \
     --vertices 6 --k 3 \
-    --use_true_mctx  # Optional: 5x faster MCTS
+    --num_epochs 20 \
+    --eval_games 42 --eval_mcts_sims 30 \
+    --use_true_mctx \  # 5x faster MCTS with JAX primitives
+    --parallel_evaluation  # All eval games in single batch
+
+# Resume from checkpoint
+python run_jax_optimized.py \
+    --resume_from experiments/exp_name/checkpoints/checkpoint_iter_5.pkl \
+    --experiment_name continued_exp \
+    --num_iterations 20 \
+    # ... other parameters
 ```
 
 ### Common Development Tasks
@@ -72,10 +83,12 @@ python src/analyze_games.py
    - ~30ms per game (n=6, k=3)
 
 2. **JAX Implementation** (`/jax_full_src/`)
-   - Experimental GPU-accelerated version
+   - GPU-accelerated version with full AlphaZero features
    - Pure JAX/Flax neural networks
    - Vectorized batch processing
    - Memory-optimized MCTX (allocates only num_sims+1 nodes)
+   - Proper UCT exploration with Dirichlet noise (25% self-play, 10% eval)
+   - Best model tracking with competitive evaluation
    - Performance varies: faster on GPU for large batches, slower on CPU
 
 ### Core Components Architecture
@@ -98,15 +111,18 @@ python src/analyze_games.py
 #### MCTS Implementation
 - **PyTorch**: Traditional tree with UCB selection, expansion, evaluation, backup
 - **JAX**: Multiple implementations with varying optimization levels:
-  - `mctx_final_optimized.py`: Memory-efficient, allocates only needed nodes
+  - `mctx_final_optimized.py`: Memory-efficient, allocates only needed nodes, proper UCT formula
   - `mctx_true_jax.py`: Pure JAX primitives for 5x speedup (optional)
 - Both implement proper MCTS (SELECT → EXPAND → EVALUATE → BACKUP)
+- **Exploration**: UCT with c_puct=3.0 + Dirichlet noise (α=0.3, ε=0.25 for self-play, ε=0.1 for eval)
 
 #### Training Pipeline (`pipeline_clique.py` / `run_jax_optimized.py`)
-1. **Self-Play**: Generate games using current model + MCTS
+1. **Self-Play**: Generate games using current model + MCTS with Dirichlet noise
 2. **Training**: Update network on collected game data
-3. **Evaluation**: Compare new model vs best model
-4. **Model Update**: Replace best model if threshold met
+3. **Evaluation**: Dual evaluation against initial AND best models
+   - First iteration: Only vs initial (no redundant self-evaluation)
+   - Later iterations: vs both opponents (in single batch with `--parallel_evaluation`)
+4. **Model Selection**: Update best model if win rate > 55%
 5. **Iterate**: Repeat for N iterations
 
 ### Critical Performance Considerations
@@ -115,6 +131,11 @@ python src/analyze_games.py
 - **JAX excels**: Large batch processing, GPU utilization, vectorized operations
 - **PyTorch excels**: Tree-based algorithms, CPU efficiency, single-game performance
 - **Key insight**: JAX struggles with tree algorithms due to dynamic structure vs static compilation
+
+#### JAX Performance Optimization Flags
+- **`--use_true_mctx`**: Enables pure JAX MCTS implementation with JAX primitives (5x faster self-play)
+- **`--parallel_evaluation`**: Runs all 21 evaluation games simultaneously instead of sequentially (10x faster evaluation)
+- Both flags can be used together for maximum performance on GPU
 
 #### Draw-Heavy Scenarios (e.g., n=7, k=4)
 - Use `--skill-variation` to create skill imbalances between players
@@ -139,6 +160,8 @@ python src/analyze_games.py
 
 5. **Batch Sizes**: JAX benefits from larger batches (>50 games) while PyTorch works well with smaller batches.
 
+6. **Transfer Learning**: Attempted n=9→n=13 transfer (August 2025). While weights transfer successfully, GNN architecture not truly size-agnostic - policy head outputs fixed size. See `jax_full_src/transfer_learning/TRANSFER_LEARNING_ATTEMPT.md` for detailed analysis and lessons learned.
+
 ## Testing and Validation
 
 - **Unit Tests**: Located in `src/test_*.py`
@@ -149,32 +172,50 @@ python src/analyze_games.py
 ## Common Issues and Solutions
 
 1. **JAX CUDA Errors**: Ensure correct CUDA/JAX version match (see requirements_jax.txt)
-2. **High Draw Rate**: Use skill variation and alternating perspective mode
+2. **High Draw Rate**: Use skill variation and alternating perspective mode (PyTorch only)
 3. **Memory Issues**: Reduce batch size or MCTS simulations
-4. **Slow Training**: Check CPU count matches `--num-cpus` parameter
+4. **Slow Evaluation**: JAX recompiles when batch sizes change. Use matching parameters:
+   ```bash
+   --game_batch_size 50 --eval_games 50  # Same batch size
+   --mcts_sims 100 --eval_mcts_sims 100  # Same MCTS depth
+   ```
+5. **Resume Training Issues**: Fixed in Sept 2025 - now properly loads initial/best models
+6. **Decreasing Win Rate in avoid_clique**: This is expected! As models improve at avoiding cliques, more games end in draws
 
 ## Ramsey Number R(5,5) Counterexample Search
 
 ### Objective
 Find a 2-coloring of K₄₂ (complete graph with 42 vertices) that avoids all monochromatic 5-cliques, proving R(5,5) ≥ 43. Currently, we only know 43 ≤ R(5,5) ≤ 48.
 
-### Game Design Approaches
+### Implemented Approach: avoid_clique Mode
 
-#### Approach 1: Cooperative (Both players avoid 5-cliques)
-- **Win condition**: All 861 edges colored without any monochromatic 5-clique
-- **Advantage**: Direct alignment with goal, both players search for safe colorings
-- **Challenge**: AlphaZero designed for adversarial games, not cooperation
+**Status**: ✅ Fully implemented and working (September 2025)
 
-#### Approach 2: Adversarial (Defender vs Attacker)
-- **Defender wins**: All edges colored without monochromatic 5-cliques
-- **Attacker wins**: Any monochromatic 5-clique appears
-- **Advantage**: Stress-tests defensive strategies, natural fit for AlphaZero
-- **Challenge**: May never provide positive training signal if defense is impossible
+Use `--avoid_clique` flag to enable this mode where:
+- **Goal**: Avoid forming k-cliques (forming one causes you to LOSE)
+- **Win**: Opponent forms a k-clique in their color
+- **Draw**: All edges filled without any k-cliques
+- **Ramsey Saving**: Draws automatically saved as potential counterexamples
 
-#### Approach 3: Progressive Difficulty with Partial Graphs
-- Start with smaller graphs (K₂₀ → K₃₀ → K₄₂)
-- Train on subgraph sampling of K₄₂
-- Gradually expand active vertices during training
+```bash
+python jax_full_src/run_jax_optimized.py \
+    --experiment_name ramsey_search \
+    --vertices 17 --k 5 \
+    --avoid_clique \
+    --num_episodes 200 \
+    --num_iterations 100
+```
+
+Counterexamples saved to: `experiments/YOUR_EXP/ramsey_counterexamples/`
+
+### Alternative Approaches (Not Implemented)
+
+#### Approach 1: Cooperative (Both players avoid k-cliques)
+- Would require modifying AlphaZero for cooperative play
+
+#### Approach 2: Progressive Difficulty
+- Start with smaller graphs and gradually increase
+- Could be implemented with curriculum learning
 
 ### Training Signal Solutions
 

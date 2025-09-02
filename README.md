@@ -270,12 +270,17 @@ alphazero_clique/
 
 We have developed a **pure JAX** implementation with an optimized MCTX (Monte Carlo Tree Search in JAX) that achieves significant speedup through GPU-accelerated vectorized computation. This implementation processes multiple games in parallel and uses JAX's JIT compilation for maximum performance.
 
-### Recent Optimizations (August 2025)
+### Recent Optimizations (September 2025)
 
 - **Memory Efficiency**: MCTX now allocates only `num_simulations + 1` nodes instead of fixed 500 (90% memory reduction)
 - **JIT-Compiled Training**: 5x faster training with fully JIT-compiled train step
 - **Vectorized Batch Preparation**: 10x faster batch preparation using JAX arrays
 - **Optional True MCTX**: Use `--use_true_mctx` flag for 5x faster self-play with JAX primitives (still sequential MCTS)
+- **Parallel Evaluation**: Use `--parallel_evaluation` flag to run all evaluation games in ONE batch (truly parallel)
+- **Dirichlet Noise**: Proper exploration with 25% noise for self-play, 10% for evaluation (AlphaZero standard)
+- **UCT Exploration**: Correctly implemented UCB formula with c_puct=3.0 for balanced exploration/exploitation
+- **Best Model Tracking**: Maintains best model throughout training with 55% win threshold for updates
+- **Flexible Evaluation**: Control evaluation games (`--eval_games`) and MCTS simulations (`--eval_mcts_sims`) separately
 - **Overall Performance**: ~35% reduction in total training time
 
 ### Quick Start with JAX
@@ -291,10 +296,20 @@ python jax_full_src/run_jax_optimized.py \
     --num_episodes 100 \
     --mcts_sims 50 \
     --game_batch_size 32 \
-    --training_batch_size 256 \  # Larger batch for better GPU utilization
+    --training_batch_size 256 \
+    --num_epochs 20 \
     --vertices 6 \
     --k 3 \
-    --use_true_mctx  # Optional: 5x faster MCTS
+    --eval_games 21 \
+    --eval_mcts_sims 30 \
+    --use_true_mctx \  # 5x faster MCTS (causes compilation overhead)
+    --parallel_evaluation  # All eval games in single batch
+
+# Resume from checkpoint
+python jax_full_src/run_jax_optimized.py \
+    --resume_from experiments/my_jax_exp/checkpoints/checkpoint_iter_5.pkl \
+    --experiment_name my_jax_exp \
+    # ... same other parameters
 ```
 
 This will:
@@ -306,12 +321,41 @@ This will:
 
 ### JAX Implementation Features
 
+#### Core Optimizations
 - **Memory-Optimized MCTX**: Dynamic node allocation based on simulation count
 - **JIT-Compiled Training**: Full training step compiled for GPU execution
 - **True MCTX Option**: Pure JAX primitives implementation (same sequential MCTS, just faster)
 - **Vectorized Operations**: Batch preparation and processing fully vectorized
 - **Pure JAX**: No PyTorch dependencies - everything runs in JAX
 - **Scalable Performance**: Optimal for different game sizes (n,k)
+
+#### AlphaZero Enhancements
+- **Proper UCT/PUCT**: Correctly implemented Upper Confidence Bound with c_puct=3.0
+- **Dirichlet Noise**: Exploration noise at root (25% self-play, 10% evaluation) following AlphaZero paper
+- **Best Model Tracking**: Maintains champion model, updates when win rate > 55%
+- **Dual Evaluation**: Evaluates against both initial and best models for progress tracking
+- **First Iteration Optimization**: Skips redundant best model evaluation in first iteration
+- **Truly Parallel Evaluation**: All evaluation games run in single batch (not sequential)
+
+#### Training Control
+- **Flexible Batch Sizes**: `--game_batch_size` for self-play, `--training_batch_size` for NN training
+- **Separate Evaluation Settings**: `--eval_games` and `--eval_mcts_sims` for evaluation control
+- **Resume Training**: `--resume_from checkpoint.pkl` to continue from saved state (properly loads initial/best models)
+- **Game Modes**: symmetric, asymmetric, avoid_clique (for Ramsey counterexamples)
+
+### ⚠️ Important Performance Considerations
+
+#### JAX Compilation Overhead
+JAX recompiles functions when input shapes change. This causes significant delays when:
+- Evaluation batch size differs from self-play batch size
+- Evaluation MCTS simulations differ from self-play simulations
+- First time running after code changes
+
+**Recommendation**: To avoid recompilation delays, use matching parameters:
+```bash
+--game_batch_size 50 --eval_games 50  # Same batch size
+--mcts_sims 100 --eval_mcts_sims 100  # Same MCTS depth
+```
 
 ### Requirements for JAX Version
 
@@ -387,6 +431,15 @@ Our optimized JAX implementation achieves significant performance improvements:
 
 See `TRAINING_OPTIMIZATION_SUMMARY.md` and `MCTX_MEMORY_OPTIMIZATION.md` for implementation details.
 
+### Transfer Learning (Experimental)
+
+We attempted transfer learning from n=9,k=4 to n=13,k=4 models (August 2025). While GNNs are theoretically size-agnostic, we discovered architectural limitations:
+
+- **What worked**: Weight transfer technically successful, model loads without errors
+- **What didn't**: Policy head outputs fixed size, performance benefits unverified due to evaluation challenges
+- **Key learning**: Current GNN architecture not truly portable across graph sizes
+
+See `jax_full_src/transfer_learning/` for implementation and `TRANSFER_LEARNING_ATTEMPT.md` for detailed findings.
 
 ## Analysis and Utilities
 

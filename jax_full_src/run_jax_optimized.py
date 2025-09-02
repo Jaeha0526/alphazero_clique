@@ -30,6 +30,7 @@ from evaluation_jax_fixed import evaluate_vs_initial_and_best
 from evaluation_jax_asymmetric import evaluate_vs_initial_and_best_asymmetric
 from evaluation_jax_parallel import evaluate_vs_initial_and_best_parallel
 from evaluation_jax_asymmetric_parallel import evaluate_vs_initial_and_best_asymmetric_parallel
+from ramsey_counterexample_saver import RamseyCounterexampleSaver
 
 
 class OptimizedSelfPlay:
@@ -39,6 +40,12 @@ class OptimizedSelfPlay:
         self.config = config
         # For n=9 vertices, we have C(9,2) = 36 possible edges
         self.num_actions = config.num_vertices * (config.num_vertices - 1) // 2
+        
+        # Initialize Ramsey counterexample saver for avoid_clique mode
+        self.ramsey_saver = None
+        if config.game_mode == "avoid_clique":
+            self.ramsey_saver = RamseyCounterexampleSaver()
+            print("📊 Ramsey counterexample saver initialized for avoid_clique mode")
         
         # Statistics tracking
         self.game_statistics = {
@@ -53,7 +60,7 @@ class OptimizedSelfPlay:
             'length_distribution': {}
         }
     
-    def play_games(self, neural_network, num_games):
+    def play_games(self, neural_network, num_games, iteration=None):
         """Play games using optimized MCTS."""
         all_game_data = []
         games_played = 0
@@ -197,6 +204,16 @@ class OptimizedSelfPlay:
                     move_data['value'] = value
                     all_game_data.append(move_data)
             
+            # Save Ramsey counterexamples if in avoid_clique mode
+            if self.ramsey_saver is not None:
+                saved_files = self.ramsey_saver.save_batch_counterexamples(
+                    boards=boards,
+                    source="self_play",
+                    iteration=iteration
+                )
+                if saved_files:
+                    batch_stats['ramsey_counterexamples'] = len(saved_files)
+            
             games_played += batch_size
         
         # Update overall statistics
@@ -335,7 +352,8 @@ def plot_learning_curve(log_file_path: str):
         (entry["iteration"], 
          entry.get("validation_policy_loss"), 
          entry.get("validation_value_loss"), 
-         entry.get("evaluation_win_rate_vs_initial"))
+         entry.get("evaluation_win_rate_vs_initial"),
+         entry.get("evaluation_win_rate_vs_best", -1))
         for entry in log_data
         if entry.get("validation_policy_loss") is not None and entry.get("validation_value_loss") is not None
     ]
@@ -349,6 +367,7 @@ def plot_learning_curve(log_file_path: str):
     policy_losses = [p[1] for p in plot_data]
     value_losses = [p[2] for p in plot_data]
     win_rates_initial = [p[3] if p[3] is not None and p[3] >= 0 else 0.5 for p in plot_data]
+    win_rates_best = [p[4] if p[4] is not None and p[4] >= 0 else None for p in plot_data]
     
     # Create the exact same plot as original pipeline (3-axis plot)
     fig, ax1 = plt.subplots(figsize=(12, 8))
@@ -370,18 +389,25 @@ def plot_learning_curve(log_file_path: str):
     ax2.tick_params(axis='y', labelcolor=color)
     ax2.legend(loc='upper right')
     
-    # Create a third y-axis for Win Rate vs Initial (Axis 3) - Green, far right axis
+    # Create a third y-axis for Win Rates (Axis 3) - Green, far right axis
     ax3 = ax1.twinx()
     ax3.spines['right'].set_position(('outward', 60))
     color = 'tab:green'
-    ax3.set_ylabel('Win Rate vs Initial', color=color, fontsize=14)
+    ax3.set_ylabel('Win Rate', color=color, fontsize=14)
     ax3.plot(iterations, win_rates_initial, color=color, marker='^', linestyle=':', linewidth=2, markersize=6, label='Win Rate vs Initial')
+    
+    # Add win rate vs best if available (skip -1 values)
+    valid_best_data = [(i, wr) for i, wr in zip(iterations, win_rates_best) if wr is not None and wr >= 0]
+    if valid_best_data:
+        best_iters, best_rates = zip(*valid_best_data)
+        ax3.plot(best_iters, best_rates, color='tab:orange', marker='o', linestyle='-', linewidth=2, markersize=5, label='Win Rate vs Best')
+    
     ax3.tick_params(axis='y', labelcolor=color)
     ax3.set_ylim(-0.05, 1.05)
     ax3.legend(loc='lower left')
 
     # Add title with hyperparameters (like original)
-    title = f"Training Losses & Win Rate vs Initial\n"
+    title = f"Training Losses & Win Rates\n"
     title += f"Optimized JAX AlphaZero - GPU Accelerated"
     plt.title(title, fontsize=12)
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -416,6 +442,8 @@ def main():
                         help='Directory to save checkpoints')
     parser.add_argument('--asymmetric', action='store_true',
                         help='Use asymmetric game mode')
+    parser.add_argument('--avoid_clique', action='store_true',
+                        help='Use avoid_clique mode (forming clique loses)')
     parser.add_argument('--vertices', type=int, default=6,
                         help='Number of vertices in the graph')
     parser.add_argument('--k', type=int, default=3,
@@ -432,6 +460,10 @@ def main():
                         help='Use parallel evaluation for massive speedup')
     parser.add_argument('--use_validation', action='store_true',
                         help='Use validation split and early stopping (like PyTorch)')
+    parser.add_argument('--eval_games', type=int, default=None,
+                        help='Number of evaluation games (default: 21 for symmetric, 40 for asymmetric)')
+    parser.add_argument('--eval_mcts_sims', type=int, default=None,
+                        help='MCTS simulations for evaluation (default: 30)')
     
     args = parser.parse_args()
     
@@ -459,7 +491,7 @@ def main():
         batch_size: int = args.game_batch_size  # For self-play
         num_vertices: int = args.vertices
         k: int = args.k
-        game_mode: str = "asymmetric" if args.asymmetric else "symmetric"
+        game_mode: str = "avoid_clique" if args.avoid_clique else ("asymmetric" if args.asymmetric else "symmetric")
         mcts_simulations: int = args.mcts_sims
         temperature_threshold: int = 10
         c_puct: float = 3.0
@@ -485,8 +517,21 @@ def main():
         num_layers=3,
         asymmetric_mode=args.asymmetric
     )
-    # Copy initial parameters
+    # Copy initial parameters (will be overwritten if resuming)
     initial_model.params = model.params
+    
+    # Initialize best model tracking
+    best_model = ImprovedBatchedNeuralNetwork(
+        num_vertices=config.num_vertices,
+        hidden_dim=64,
+        num_layers=3,
+        asymmetric_mode=args.asymmetric
+    )
+    best_model.params = model.params  # Start with initial model as best
+    best_model_iteration = 0
+    best_win_rate = 0.0
+    model_selection_threshold = 0.55  # Model must win >55% to become new best
+    
     print("Neural network created successfully!")
     
     # Create self-play instance
@@ -496,11 +541,17 @@ def main():
     log_file_path = experiment_dir / "training_log.json"
     training_log = []
     
-    # Store initial model params for evaluation
-    initial_params = model.params
+    # Save initial model if this is the first run
+    initial_model_path = experiment_dir / "models" / "initial_model.pkl"
+    if not args.resume_from and not initial_model_path.exists():
+        initial_model_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(initial_model_path, 'wb') as f:
+            pickle.dump(initial_model.params, f)
+        print(f"Saved initial model to {initial_model_path}")
+    
     print("Setup complete, starting training...")
     
-    # Load existing log if resuming
+    # Load existing data if resuming
     start_iteration = 0
     optimizer_state = None
     if args.resume_from:
@@ -515,8 +566,39 @@ def main():
                 with open(log_file_path, 'r') as f:
                     training_log = json.load(f)
                 print(f"Loaded existing log with {len(training_log)} entries")
+                
+                # Restore best model tracking info from log
+                if training_log:
+                    last_entry = training_log[-1]
+                    best_model_iteration = last_entry.get('best_model_iteration', 0)
+                    print(f"Best model is from iteration {best_model_iteration}")
             except Exception as e:
                 print(f"Could not load existing log: {e}")
+        
+        # Load initial model (MUST exist when resuming)
+        initial_model_path = experiment_dir / "models" / "initial_model.pkl"
+        if initial_model_path.exists():
+            print(f"Loading initial model from {initial_model_path}")
+            with open(initial_model_path, 'rb') as f:
+                initial_model_params = pickle.load(f)
+                initial_model.params = initial_model_params
+                print("✅ Initial model loaded successfully")
+        else:
+            print("⚠️ WARNING: No initial model found! Using current model (INCORRECT for evaluation)")
+            # This is wrong but prevents crash - initial model should always exist
+        
+        # Load best model if it exists
+        best_model_path = experiment_dir / "models" / "best_model.pkl"
+        if best_model_path.exists():
+            print(f"Loading best model from {best_model_path}")
+            with open(best_model_path, 'rb') as f:
+                best_model_params = pickle.load(f)
+                best_model.params = best_model_params
+                print("✅ Best model loaded successfully")
+        else:
+            print("⚠️ No best model found, using current checkpoint as best")
+            best_model.params = model.params
+            best_model_iteration = start_iteration
     
     # Training loop
     for iteration in range(start_iteration, args.num_iterations):
@@ -528,7 +610,7 @@ def main():
         print(f"\nGenerating {args.num_episodes} self-play games...")
         start_time = time.time()
         
-        game_data = self_play.play_games(model, args.num_episodes)
+        game_data = self_play.play_games(model, args.num_episodes, iteration=iteration)
         
         self_play_time = time.time() - start_time
         print(f"Self-play completed in {self_play_time:.1f}s")
@@ -600,13 +682,13 @@ def main():
         else:
             print(f"Final losses - Policy: {policy_loss:.4f}, Value: {value_loss:.4f}")
         
-        # Evaluate against initial model
+        # Evaluate against initial model with command-line overrides
         eval_config = {
-            'num_games': 40 if args.asymmetric else 21,  # More games for asymmetric
+            'num_games': args.eval_games if args.eval_games else (40 if args.asymmetric else 21),
             'num_vertices': args.vertices,
             'k': args.k,
-            'game_mode': "asymmetric" if args.asymmetric else "symmetric",
-            'mcts_sims': 30,  # Fewer simulations for faster evaluation
+            'game_mode': config.game_mode,  # Use the game_mode from config
+            'mcts_sims': args.eval_mcts_sims if args.eval_mcts_sims else 30,
             'c_puct': 3.0
         }
         
@@ -617,14 +699,14 @@ def main():
                 eval_results = evaluate_vs_initial_and_best_asymmetric_parallel(
                     current_model=model,
                     initial_model=initial_model,
-                    best_model=None,  # Could add best model tracking later
+                    best_model=best_model if iteration > 0 else None,  # Skip best eval in first iteration
                     config=eval_config
                 )
             else:
                 eval_results = evaluate_vs_initial_and_best_asymmetric(
                     current_model=model,
                     initial_model=initial_model,
-                    best_model=None,  # Could add best model tracking later
+                    best_model=best_model if iteration > 0 else None,  # Skip best eval in first iteration
                     config=eval_config
                 )
             win_rate_vs_initial = eval_results['win_rate_vs_initial']
@@ -637,22 +719,78 @@ def main():
             print(f"  As Defender: {defender_rate:.1%}")
         else:
             if args.parallel_evaluation:
-                print("Using PARALLEL symmetric evaluation") 
-                eval_results = evaluate_vs_initial_and_best_parallel(
-                    current_model=model,
-                    initial_model=initial_model,
-                    best_model=None,
-                    config=eval_config
-                )
+                # First iteration: only evaluate vs initial
+                if iteration == 0:
+                    print("Using PARALLEL evaluation (first iteration - vs initial only)")
+                    from evaluation_jax_parallel import evaluate_models_parallel
+                    eval_results_raw = evaluate_models_parallel(
+                        model1=model,
+                        model2=initial_model,
+                        num_games=eval_config['num_games'],
+                        num_vertices=eval_config['num_vertices'],
+                        k=eval_config['k'],
+                        mcts_sims=eval_config['mcts_sims'],
+                        c_puct=eval_config['c_puct'],
+                        temperature=0.0,
+                        game_mode=eval_config['game_mode']
+                    )
+                    eval_results = {
+                        'win_rate_vs_initial': eval_results_raw['model1_win_rate'],
+                        'draw_rate_vs_initial': eval_results_raw['draw_rate'],
+                        'eval_time_vs_initial': eval_results_raw['eval_time'],
+                        'vs_initial_details': eval_results_raw,
+                        'win_rate_vs_best': -1,  # No best model yet
+                        'draw_rate_vs_best': -1,
+                        'eval_time_vs_best': 0,
+                        'vs_best_details': None
+                    }
+                else:
+                    # Use truly parallel evaluation for both opponents in one batch
+                    print("Using TRULY PARALLEL evaluation (vs initial AND best in one batch)")
+                    from evaluation_jax_truly_parallel import evaluate_vs_initial_and_best_truly_parallel
+                    eval_results = evaluate_vs_initial_and_best_truly_parallel(
+                        current_model=model,
+                        initial_model=initial_model,
+                        best_model=best_model,
+                        config=eval_config
+                    )
             else:
                 eval_results = evaluate_vs_initial_and_best(
                     current_model=model,
                     initial_model=initial_model,
-                    best_model=None,
+                    best_model=best_model if iteration > 0 else None,  # Skip best eval in first iteration
                     config=eval_config
                 )
             win_rate_vs_initial = eval_results['win_rate_vs_initial']
             eval_time = eval_results['eval_time_vs_initial']
+        
+        # Extract win rate vs best
+        win_rate_vs_best = eval_results.get('win_rate_vs_best', -1)
+        
+        # Model selection: update best model if current beats it
+        if iteration == 0:
+            # First iteration: automatically make it the best model
+            print(f"\n🎯 First iteration: Setting trained model as initial best")
+            best_model.params = model.params
+            best_model_iteration = 1
+            best_win_rate = win_rate_vs_initial  # Use win rate vs initial as reference
+            # Save best model
+            best_model_path = experiment_dir / "models" / "best_model.pkl"
+            best_model_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(best_model_path, 'wb') as f:
+                pickle.dump(best_model.params, f)
+        elif win_rate_vs_best > model_selection_threshold:
+            print(f"\n🏆 New best model! Win rate vs previous best: {win_rate_vs_best:.1%}")
+            best_model.params = model.params
+            best_model_iteration = iteration + 1
+            best_win_rate = win_rate_vs_best
+            # Save best model
+            best_model_path = experiment_dir / "models" / "best_model.pkl"
+            best_model_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(best_model_path, 'wb') as f:
+                pickle.dump(best_model.params, f)
+        elif win_rate_vs_best > 0:
+            print(f"\n📊 Model did not beat best. Win rate: {win_rate_vs_best:.1%} (need >{model_selection_threshold:.1%})")
         
         # Save checkpoint
         checkpoint_path = save_checkpoint(
@@ -676,6 +814,8 @@ def main():
             'validation_policy_loss': float(policy_loss),
             'validation_value_loss': float(value_loss),
             'evaluation_win_rate_vs_initial': float(win_rate_vs_initial),
+            'evaluation_win_rate_vs_best': float(win_rate_vs_best),
+            'best_model_iteration': best_model_iteration,
             'timestamp': datetime.now().isoformat(),
             # Self-play statistics
             'selfplay_stats': {

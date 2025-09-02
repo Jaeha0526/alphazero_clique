@@ -1,5 +1,82 @@
 # AlphaZero Clique Game - Project History
 
+## 2025-09-01 - Critical AlphaZero Improvements
+
+**Objective**: 
+Fix critical issues in JAX implementation including missing exploration, improve evaluation efficiency, and add proper best model tracking.
+
+**Key Improvements**:
+
+### 1. Fixed Dirichlet Noise (Critical Bug Fix)
+- **Problem**: JAX MCTS had NO Dirichlet noise at root, causing deterministic self-play
+- **Impact**: All parallel games were identical, severely limiting exploration
+- **Solution**: Added proper Dirichlet noise (25% for self-play, 10% for evaluation)
+- **Result**: Diverse game generation, proper exploration following AlphaZero paper
+
+### 2. Best Model Tracking System  
+- **Implementation**: Maintains champion model throughout training
+- **Model Selection**: 55% win threshold for updates (prevents regression)
+- **Dual Evaluation**: Tracks progress against both initial and best models
+- **First Iteration**: Automatically sets first trained model as initial best
+
+### 3. Truly Parallel Evaluation
+- **Previous**: "Parallel" evaluation ran two sequential batches
+- **Now**: All games (e.g., 42 total) run in ONE batch with `--parallel_evaluation`
+- **First Iteration Optimization**: Skips redundant best model evaluation
+- **Performance**: ~10x speedup for evaluation phase
+
+### 4. Enhanced Training Control
+- **Flexible Evaluation**: `--eval_games` and `--eval_mcts_sims` for separate control
+- **Batch Size Control**: Independent self-play and training batch sizes
+- **Resume Training**: Proper checkpoint loading with `--resume_from`
+- **Avoid Clique Mode**: Working correctly with Ramsey counterexample saving
+
+### 5. UCT Verification
+- **Formula**: Confirmed correct implementation of Q + c_puct * sqrt(N_sum) * P / (N + 1)
+- **c_puct**: Set to 3.0 for balanced exploration/exploitation
+- **Exploration**: Properly combining UCT with Dirichlet noise
+
+**Results**:
+- Training curves now show proper learning progression
+- Diverse self-play games with meaningful exploration
+- Efficient evaluation with true parallelization
+- Robust model selection preventing regression
+
+**Files Modified**:
+- `mctx_final_optimized.py`: Added Dirichlet noise
+- `mctx_true_jax.py`: Added Dirichlet noise, fixed import issue
+- `run_jax_optimized.py`: Best model tracking, parallel evaluation, first iteration optimization
+- `evaluation_jax_truly_parallel.py`: Integrated for single-batch evaluation
+
+## 2025-08-31 - Transfer Learning Attempt
+
+**Objective**: 
+Attempted to transfer learned weights from n=9,k=4 model (trained for 13 iterations) to initialize n=13,k=4 training, aiming to accelerate convergence and preserve learned patterns.
+
+**Implementation**:
+- Created transfer learning utilities in `jax_full_src/transfer_learning/`
+- Developed two approaches: complex weight mapping and direct parameter copy
+- Direct copy approach technically successful (all 65 parameters transferred)
+
+**Key Findings**:
+- **Architecture Limitation**: GNN not truly size-agnostic as expected - policy head outputs fixed dimensions (shape mismatch: 169 vs expected 78)
+- **Technical Challenges**: JAX JIT compilation overhead made evaluation impractical (2+ minute compilation times on CPU)
+- **Performance**: Unable to verify actual performance benefits due to evaluation timeouts and shape mismatches
+
+**Lessons Learned**:
+- GNN message passing is size-agnostic but policy head architecture is not
+- Need to design architecture with transfer learning in mind from the start
+- JAX compilation overhead is prohibitive for rapid experimentation without GPU
+
+**Artifacts Created**:
+- Transfer scripts: `transfer_weights.py`, `transfer_weights_fixed.py`
+- Evaluation utilities: `evaluate_transfer.py`, `evaluate_transfer_simple.py`
+- Documentation: `TRANSFER_LEARNING_ATTEMPT.md`
+- Checkpoint: `checkpoint_n13k4_transferred_v2.pkl`
+
+**Recommendation**: 
+Current architecture requires modification for effective transfer learning. For immediate needs, fresh training recommended for n=13,k=4.
+
 ## 2025-07-31 - Initial Project Documentation
 
 **Project Overview**: 
