@@ -17,7 +17,7 @@ def run_pytorch_test():
     print("="*60)
     
     cmd = [
-        "python", "/workspace/alphazero_clique/src/pipeline_clique.py",
+        "python", "src/pipeline_clique.py",
         "--mode", "pipeline",
         "--vertices", "6",
         "--k", "3",
@@ -76,7 +76,7 @@ def run_jax_test():
     print("="*60)
     
     cmd = [
-        "python", "/workspace/alphazero_clique/jax_full_src/run_jax_optimized.py",
+        "python", "jax_full_src/run_jax_optimized.py",
         "--num_iterations", "1",
         "--num_episodes", "10",
         "--game_batch_size", "10",
@@ -146,7 +146,7 @@ def test_mcts_only():
 import os
 os.environ['JAX_PLATFORMS'] = 'cpu'
 import sys
-sys.path.append('/workspace/alphazero_clique/jax_full_src')
+sys.path.append('jax_full_src')
 
 import time
 import jax.numpy as jnp

@@ -461,6 +461,28 @@ class MCTXTrueJAX:
             boards.get_valid_moves_mask()
         )
         
+        # Add Dirichlet noise to root policies for exploration
+        # Use different noise weights for self-play vs evaluation
+        if temperature > 0:  
+            # Self-play: use standard noise weight
+            noise_weight = 0.25
+        else:  
+            # Evaluation: use smaller noise weight for variety while maintaining strong play
+            noise_weight = 0.1
+        
+        if noise_weight > 0:
+            noise_alpha = 0.3  # Standard AlphaGo/AlphaZero value
+            key = jax.random.PRNGKey(int(time.time() * 1000) % 2**32)
+            dirichlet_noise = jax.random.dirichlet(key, jnp.ones(self.num_actions) * noise_alpha, shape=(self.batch_size,))
+            
+            # Mix original priors with noise (only for valid moves)
+            valid_mask = boards.get_valid_moves_mask()
+            noisy_policies = (1 - noise_weight) * root_policies + noise_weight * dirichlet_noise
+            # Re-mask and normalize
+            noisy_policies = jnp.where(valid_mask, noisy_policies, 0.0)
+            noisy_policies = noisy_policies / jnp.sum(noisy_policies, axis=1, keepdims=True)
+            root_policies = noisy_policies
+        
         tree = tree._replace(
             prior_probs=tree.prior_probs.at[:, 0].set(root_policies)
         )

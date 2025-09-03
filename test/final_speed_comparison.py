@@ -16,7 +16,7 @@ def run_test(implementation, n, k, games, sims, epochs, batch_size, timeout=300)
     
     if implementation == "pytorch":
         cmd = [
-            "python", "/workspace/alphazero_clique/src/pipeline_clique.py",
+            "python", "src/pipeline_clique.py",
             "--mode", "pipeline",
             "--vertices", str(n),
             "--k", str(k),
@@ -31,7 +31,7 @@ def run_test(implementation, n, k, games, sims, epochs, batch_size, timeout=300)
         env = {**os.environ, "WANDB_MODE": "disabled"}
     else:  # jax
         cmd = [
-            "python", "/workspace/alphazero_clique/jax_full_src/run_jax_optimized.py",
+            "python", "jax_full_src/run_jax_optimized.py",
             "--num_iterations", "1",
             "--num_episodes", str(games),
             "--game_batch_size", str(min(games, 32)),  # Cap batch size
@@ -77,7 +77,7 @@ def test_mcts_batch_scaling():
 import os
 os.environ['JAX_PLATFORMS'] = 'cpu'
 import sys
-sys.path.append('/workspace/alphazero_clique/jax_full_src')
+sys.path.append('jax_full_src')
 
 import time
 import jax.numpy as jnp
@@ -222,7 +222,7 @@ def main():
         print(f"\nAverage speedup: {avg_speedup:.2f}x")
         
         # Save results
-        output_file = "/workspace/alphazero_clique/test/speed_comparison_results.json"
+        output_file = "test/speed_comparison_results.json"
         with open(output_file, "w") as f:
             json.dump({
                 "timestamp": datetime.now().isoformat(),

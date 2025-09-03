@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 
 # Add the jax_full_src directory to the path
-sys.path.append('/workspace/alphazero_clique/jax_full_src')
+sys.path.append('jax_full_src')
 
 from vectorized_nn import ImprovedBatchedNeuralNetwork
 from train_jax_fully_optimized import train_network_jax_optimized

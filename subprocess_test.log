@@ -1,0 +1,749 @@
+Starting AlphaZero with args: Namespace(num_iterations=1, num_episodes=10, game_batch_size=10, training_batch_size=32, num_epochs=2, checkpoint_dir='checkpoints_jax_optimized', asymmetric=False, avoid_clique=False, vertices=6, k=3, mcts_sims=10, experiment_name='test_subprocess_21cpu', resume_from=None, use_true_mctx=False, parallel_evaluation=False, use_validation=False, eval_games=21, eval_mcts_sims=5, python_eval=True, skip_evaluation=False, subprocess_eval=True, eval_num_cpus=21)
+JAX devices: [CudaDevice(id=0)]
+Using device: gpu
+Config created: main.<locals>.Config(batch_size=10, num_vertices=6, k=3, game_mode='symmetric', mcts_simulations=10, temperature_threshold=10, c_puct=3.0, perspective_mode='alternating', use_true_mctx=False)
+Creating neural network (this may take 1-2 minutes for JAX compilation)...
+  Compiling neural network model...
+  Compiling neural network model...
+  Compiling neural network model...
+Neural network created successfully!
+Saved initial model to experiments/test_subprocess_21cpu/models/initial_model.pkl
+Setup complete, starting training...
+
+============================================================
+Iteration 1/1
+============================================================
+
+Generating 10 self-play games...
+
+Starting batch of 10 games (Total: 0/10)
+  Creating MCTXFinalOptimized: 15 actions, batch_size=10
+  Creating MCTXFinalOptimized (Python loops): 15 actions, batch_size=10
+  Initializing boards: n=6, k=3, mode=symmetric
+  Batch 10 games - Move 0, Active games: 10
+    Starting MCTS search...
+Starting Final Optimized MCTS with 10 simulations
+Final optimized MCTS complete in 13.644s (1364.4ms per game)
+    MCTS search completed in 13.64s
+  Batch 10 games - Move 1, Active games: 10
+    Starting MCTS search...
+Starting Final Optimized MCTS with 10 simulations
+Final optimized MCTS complete in 1.616s (161.6ms per game)
+    MCTS search completed in 1.62s
+  Batch 10 games - Move 2, Active games: 10
+    Starting MCTS search...
+Starting Final Optimized MCTS with 10 simulations
+Final optimized MCTS complete in 1.644s (164.4ms per game)
+    MCTS search completed in 1.64s
+  Batch 10 games - Move 3, Active games: 10
+    Starting MCTS search...
+Starting Final Optimized MCTS with 10 simulations
+Final optimized MCTS complete in 1.776s (177.6ms per game)
+    MCTS search completed in 1.78s
+  Batch 10 games - Move 4, Active games: 10
+    Starting MCTS search...
+Starting Final Optimized MCTS with 10 simulations
+Final optimized MCTS complete in 1.868s (186.8ms per game)
+    MCTS search completed in 1.87s
+  Batch 10 games - Move 5, Active games: 10
+    Starting MCTS search...
+Starting Final Optimized MCTS with 10 simulations
+Final optimized MCTS complete in 1.609s (160.9ms per game)
+    MCTS search completed in 1.61s
+  Batch 10 games - Move 6, Active games: 9
+    Starting MCTS search...
+Starting Final Optimized MCTS with 10 simulations
+Final optimized MCTS complete in 1.694s (169.4ms per game)
+    MCTS search completed in 1.69s
+  Batch 10 games - Move 7, Active games: 7
+    Starting MCTS search...
+Starting Final Optimized MCTS with 10 simulations
+Final optimized MCTS complete in 1.791s (179.1ms per game)
+    MCTS search completed in 1.79s
+  Batch 10 games - Move 8, Active games: 6
+    Starting MCTS search...
+Starting Final Optimized MCTS with 10 simulations
+Final optimized MCTS complete in 1.980s (198.0ms per game)
+    MCTS search completed in 1.98s
+  Batch 10 games - Move 9, Active games: 1
+    Starting MCTS search...
+Starting Final Optimized MCTS with 10 simulations
+Final optimized MCTS complete in 1.998s (199.8ms per game)
+    MCTS search completed in 2.00s
+
+📊 Self-Play Statistics Summary:
+  Games in this batch: 10
+  Average game length: 8.3 moves
+  Game length range: 6 - 10 moves
+
+📈 Overall Statistics (Total: 10 games):
+  Average game length: 8.3 moves
+  Game length distribution: {6: 1, 7: 2, 8: 1, 9: 5, 10: 1}
+Self-play completed in 33.6s
+Games per second: 0.3
+Total training examples: 83
+
+Training network for 2 epochs...
+Using OPTIMIZED training (JIT + vectorized batches)
+Preprocessing experiences into JAX arrays...
+Preprocessing completed in 0.07s
+Total training examples: 83
+
+Optimized Training:
+  Epochs: 2
+  Steps per epoch: 2
+  Batch size: 32
+  Using JIT-compiled train step
+  Using vectorized batch preparation
+Epoch 1/2 - Policy Loss: 2.6815, Value Loss: 0.5077, Time: 33.37s
+Epoch 2/2 - Policy Loss: 2.5076, Value Loss: 0.4269, Time: 0.01s
+
+Training completed in 33.4s
+Average time per epoch: 16.71s
+Average time per step: 8354.5ms
+Throughput: 5 samples/sec
+Final losses - Policy: 2.5076, Value: 0.4269
+Training completed in 34.0s
+Final losses - Policy: 2.5946, Value: 0.4673
+Using SUBPROCESS evaluation with 21 CPUs
+
+Subprocess Parallel Evaluation
+  Models: tmp1ayj0aww.pkl vs tmpju9k1mzg.pkl
+  Games: 21 using 21 workers
+  Config: n=6, k=3, sims=5
+  Starting worker 0: 1 games
+  Starting worker 1: 1 games
+  Starting worker 2: 1 games
+  Starting worker 3: 1 games
+  Starting worker 4: 1 games
+  Starting worker 5: 1 games
+  Starting worker 6: 1 games
+  Starting worker 7: 1 games
+  Starting worker 8: 1 games
+  Starting worker 9: 1 games
+  Starting worker 10: 1 games
+  Starting worker 11: 1 games
+  Starting worker 12: 1 games
+  Starting worker 13: 1 games
+  Starting worker 14: 1 games
+  Starting worker 15: 1 games
+  Starting worker 16: 1 games
+  Starting worker 17: 1 games
+  Starting worker 18: 1 games
+  Starting worker 19: 1 games
+  Starting worker 20: 1 games
+
+  Waiting for workers...
+  Worker 0: Loading models...
+Loading model from /tmp/tmp1ayj0aww.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Loading model from /tmp/tmpju9k1mzg.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Worker 0: Evaluating 1 games...
+  Using Python MCTS for evaluation (no compilation overhead)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 4.744s (4744.3ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 1.265s (1264.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.055s (55.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (46.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.054s (53.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (48.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.054s (53.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (45.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.053s (53.2ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (46.2ms per game)
+  Move 5: 1 active games
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.054s (54.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (46.2ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.050s (49.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (46.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.053s (53.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (45.7ms per game)
+
+Parallel Evaluation Results (1 games in 8.1s):
+  Model1 wins: 0 (0.0%)
+  Model2 wins: 1 (100.0%)
+  Draws: 0 (0.0%)
+  Games/sec: 0.1
+Worker 0: Completed 0-1-0
+  Worker 1: Loading models...
+Loading model from /tmp/tmp1ayj0aww.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Loading model from /tmp/tmpju9k1mzg.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Worker 1: Evaluating 1 games...
+  Using Python MCTS for evaluation (no compilation overhead)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 4.657s (4656.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 1.072s (1072.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.057s (56.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (47.2ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.055s (54.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.058s (57.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.050s (49.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.055s (54.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.2ms per game)
+  Move 5: 1 active games
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.059s (58.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (46.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.053s (53.1ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.2ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.050s (49.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.052s (51.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.050s (50.1ms per game)
+
+Parallel Evaluation Results (1 games in 8.1s):
+  Model1 wins: 1 (100.0%)
+  Model2 wins: 0 (0.0%)
+  Draws: 0 (0.0%)
+  Games/sec: 0.1
+Worker 1: Completed 1-0-0
+  Worker 2: Loading models...
+Loading model from /tmp/tmp1ayj0aww.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Loading model from /tmp/tmpju9k1mzg.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Worker 2: Evaluating 1 games...
+  Using Python MCTS for evaluation (no compilation overhead)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 4.715s (4714.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.697s (697.3ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.065s (64.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (48.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.053s (52.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (44.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.052s (52.2ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (44.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.054s (53.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (45.7ms per game)
+  Move 5: 1 active games
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.054s (53.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.052s (51.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.060s (59.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (45.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.1ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (45.1ms per game)
+
+Parallel Evaluation Results (1 games in 8.0s):
+  Model1 wins: 0 (0.0%)
+  Model2 wins: 1 (100.0%)
+  Draws: 0 (0.0%)
+  Games/sec: 0.1
+Worker 2: Completed 0-1-0
+  Worker 3: Loading models...
+Loading model from /tmp/tmp1ayj0aww.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Loading model from /tmp/tmpju9k1mzg.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Worker 3: Evaluating 1 games...
+  Using Python MCTS for evaluation (no compilation overhead)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 4.818s (4818.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 1.760s (1760.3ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.056s (56.2ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (46.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.055s (54.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.048s (48.2ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.055s (54.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (46.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.054s (53.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (46.3ms per game)
+  Move 5: 1 active games
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.056s (55.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.056s (56.3ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.052s (52.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (48.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.051s (50.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (46.2ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.055s (54.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (46.7ms per game)
+
+Parallel Evaluation Results (1 games in 8.4s):
+  Model1 wins: 1 (100.0%)
+  Model2 wins: 0 (0.0%)
+  Draws: 0 (0.0%)
+  Games/sec: 0.1
+Worker 3: Completed 1-0-0
+  Worker 4 failed: ERROR:2025-09-02 05:01:47,458:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729042: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 5 failed: ERROR:2025-09-02 05:01:47,369:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729074: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 6 failed: ERROR:2025-09-02 05:01:47,347:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729073: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 7: Loading models...
+Loading model from /tmp/tmp1ayj0aww.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Loading model from /tmp/tmpju9k1mzg.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Worker 7: Evaluating 1 games...
+  Using Python MCTS for evaluation (no compilation overhead)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 4.695s (4694.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 1.784s (1783.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.058s (57.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (45.3ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.053s (52.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (44.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.054s (53.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (44.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.052s (52.1ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (45.1ms per game)
+  Move 5: 1 active games
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.053s (52.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (45.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (47.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.044s (44.4ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.052s (52.2ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (45.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.048s (47.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.044s (44.1ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.044s (43.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (46.6ms per game)
+  Move 10: 1 active games
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (47.4ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (46.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.052s (51.6ms per game)
+
+Parallel Evaluation Results (1 games in 8.6s):
+  Model1 wins: 0 (0.0%)
+  Model2 wins: 1 (100.0%)
+  Draws: 0 (0.0%)
+  Games/sec: 0.1
+Worker 7: Completed 0-1-0
+  Worker 8 failed: ERROR:2025-09-02 05:01:47,472:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.731772: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 9 failed: ERROR:2025-09-02 05:01:47,381:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729084: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 10 failed: ERROR:2025-09-02 05:01:47,291:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729038: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 11 failed: ERROR:2025-09-02 05:01:47,472:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729059: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 12 failed: ERROR:2025-09-02 05:01:47,284:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729060: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 13: Loading models...
+Loading model from /tmp/tmp1ayj0aww.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Loading model from /tmp/tmpju9k1mzg.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Worker 13: Evaluating 1 games...
+  Using Python MCTS for evaluation (no compilation overhead)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 4.734s (4733.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 1.683s (1682.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.057s (57.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.050s (50.2ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.055s (55.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (46.4ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.054s (54.3ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.053s (53.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.061s (60.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.1ms per game)
+  Move 5: 1 active games
+
+Parallel Evaluation Results (1 games in 7.6s):
+  Model1 wins: 1 (100.0%)
+  Model2 wins: 0 (0.0%)
+  Draws: 0 (0.0%)
+  Games/sec: 0.1
+Worker 13: Completed 1-0-0
+  Worker 14 failed: ERROR:2025-09-02 05:01:47,464:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729043: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 15 failed: ERROR:2025-09-02 05:01:47,468:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729052: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 16 failed: ERROR:2025-09-02 05:01:47,467:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729067: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 17 failed: ERROR:2025-09-02 05:01:47,332:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729084: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 18: Loading models...
+Loading model from /tmp/tmp1ayj0aww.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Loading model from /tmp/tmpju9k1mzg.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Worker 18: Evaluating 1 games...
+  Using Python MCTS for evaluation (no compilation overhead)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 4.753s (4752.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 1.723s (1723.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.056s (55.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (45.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.054s (53.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (47.1ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.055s (54.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (46.4ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.055s (54.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (47.2ms per game)
+  Move 5: 1 active games
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.4ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.048s (47.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (45.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.4ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (45.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (45.3ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.045s (45.1ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.050s (50.1ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.050s (49.6ms per game)
+  Move 10: 1 active games
+
+Parallel Evaluation Results (1 games in 8.3s):
+  Model1 wins: 0 (0.0%)
+  Model2 wins: 1 (100.0%)
+  Draws: 0 (0.0%)
+  Games/sec: 0.1
+Worker 18: Completed 0-1-0
+  Worker 19 failed: ERROR:2025-09-02 05:01:47,407:jax._src.xla_bridge:502: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax/_src/xla_bridge.py", line 500, in discover_pjrt_plugins
+    plugin_module.initialize()
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 328, in initialize
+    _check_cuda_versions(raise_on_first_error=True)
+  File "/workspace/alphazero_clique/venv/lib/python3.11/site-packages/jax_plugins/xla_cuda12/__init__.py", line 285, in _check_cuda_versions
+    local_device_count = cuda_versions.cuda_device_count()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: jaxlib/cuda/versions_helpers.cc:113: operation cuInit(0) failed: CUDA_ERROR_NO_DEVICE
+2025-09-02 05:01:48.729047: F external/xla/xla/tsl/platform/default/env.cc:80] Check failed: ret == 0 (11 vs. 0)Thread tf_foreach creation via pthread_create() failed.
+
+  Worker 20: Loading models...
+Loading model from /tmp/tmp1ayj0aww.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Loading model from /tmp/tmpju9k1mzg.pkl
+  Compiling neural network model...
+Model loaded: n=6, hidden=64
+Worker 20: Evaluating 1 games...
+  Using Python MCTS for evaluation (no compilation overhead)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 4.672s (4671.7ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 1.751s (1750.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.066s (66.4ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (48.6ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.056s (55.9ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.048s (47.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.056s (55.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.048s (48.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.072s (72.1ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.053s (52.8ms per game)
+  Move 5: 1 active games
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.059s (59.4ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.047s (46.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.050s (50.3ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (46.3ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.050s (50.0ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.046s (46.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.067s (66.8ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.048s (48.1ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.052s (52.5ms per game)
+Starting Final Optimized MCTS with 5 simulations
+Final optimized MCTS complete in 0.049s (49.3ms per game)
+  Move 10: 1 active games
+
+Parallel Evaluation Results (1 games in 8.4s):
+  Model1 wins: 0 (0.0%)
+  Model2 wins: 1 (100.0%)
+  Draws: 0 (0.0%)
+  Games/sec: 0.1
+Worker 20: Completed 0-1-0
+
+Results (8 games in 27.7s):
+  Model1: 3 wins (37.5%)
+  Model2: 5 wins (62.5%)
+  Draws: 0 (0.0%)
+  Speed: 0.3 games/sec
+
+🎯 First iteration: Setting trained model as initial best
+Saved checkpoint to experiments/test_subprocess_21cpu/checkpoints/checkpoint_iter_1.pkl
+Updated training log: experiments/test_subprocess_21cpu/training_log.json
+Learning curve saved to experiments/test_subprocess_21cpu/training_losses.png
+
+Iteration 1 completed!
+Self-play: 33.6s (0.3 games/sec)
+Training: 34.0s
+Total time: 67.7s
+
+============================================================
+Training completed!
+============================================================
+
+📊 TRAINING SUMMARY:
+Total iterations: 1
+Total self-play time: 33.6s
+Total training time: 34.0s
+Total training examples: 83
+Average speed: 0.3 games/sec
+Learning curve saved to experiments/test_subprocess_21cpu/training_losses.png
+
+📈 Final plots saved to: experiments/test_subprocess_21cpu/training_losses.png
+
+Experiment results saved to: experiments/test_subprocess_21cpu
+Training log: experiments/test_subprocess_21cpu/training_log.json
+✓ Optimized AlphaZero training complete!

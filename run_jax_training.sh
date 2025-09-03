@@ -9,8 +9,8 @@ export DISABLE_WANDB=true
 export JAX_PLATFORM_NAME=gpu
 export CUDA_VISIBLE_DEVICES=0
 
-# Navigate to the project directory
-cd /workspace/alphazero_clique
+# Script assumes running from project root directory
+# cd alphazero_clique  # Uncomment if needed
 
 # Run the training with standard settings for 3 iterations
 echo "Configuration:"

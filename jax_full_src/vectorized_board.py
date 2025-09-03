@@ -28,7 +28,7 @@ class VectorizedCliqueBoard:
             batch_size: Number of games to play in parallel
             num_vertices: Number of vertices in each graph  
             k: Size of clique needed to win
-            game_mode: "asymmetric" or "symmetric"
+            game_mode: "asymmetric", "symmetric", or "avoid_clique"
         """
         self.batch_size = batch_size
         self.num_vertices = num_vertices
@@ -191,8 +191,17 @@ class VectorizedCliqueBoard:
                 
                 # Update game states where this player completed a clique
                 newly_won = clique_complete & (self.game_states == 0)
-                self.game_states = jnp.where(newly_won, player, self.game_states)
-                self.winners = jnp.where(newly_won, player - 1, self.winners)
+                
+                if self.game_mode == "avoid_clique":
+                    # In avoid_clique mode, forming a clique means you LOSE
+                    # So the OTHER player wins
+                    winning_player = 3 - player  # If player 1 forms clique, player 2 wins
+                    self.game_states = jnp.where(newly_won, winning_player, self.game_states)
+                    self.winners = jnp.where(newly_won, winning_player - 1, self.winners)
+                else:
+                    # Normal modes: forming a clique means you WIN
+                    self.game_states = jnp.where(newly_won, player, self.game_states)
+                    self.winners = jnp.where(newly_won, player - 1, self.winners)
     
     def get_board_states(self) -> List[Dict]:
         """

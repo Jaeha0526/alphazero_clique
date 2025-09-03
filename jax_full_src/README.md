@@ -23,7 +23,7 @@ python jax_full_src/run_jax_optimized.py \
     --self-play-games 100 \
     --mcts-sims 50
 
-# Full example with all options
+# Full example with all optimization flags
 python jax_full_src/run_jax_optimized.py \
     --experiment-name my_jax_run \
     --vertices 6 \
@@ -37,8 +37,30 @@ python jax_full_src/run_jax_optimized.py \
     --hidden-dim 64 \
     --num-layers 2 \
     --learning-rate 0.001 \
-    --perspective-mode alternating
+    --perspective-mode alternating \
+    --use_true_mctx \  # Enable pure JAX MCTS (5x faster)
+    --parallel_evaluation  # Run evaluation games in parallel (10x faster)
 ```
+
+## Game Modes
+
+The JAX implementation supports three game modes:
+
+1. **Symmetric Mode** (`game_mode='symmetric'`)
+   - Both players try to form a k-clique first
+   - First to complete a k-clique wins
+   - Standard competitive gameplay
+
+2. **Asymmetric Mode** (`game_mode='asymmetric'`)
+   - Player 1 (Attacker) tries to form k-cliques
+   - Player 2 (Defender) tries to prevent any k-cliques
+   - Different strategies for each role
+
+3. **Avoid Clique Mode** (`game_mode='avoid_clique'`) - NEW!
+   - Both players try to AVOID forming k-cliques
+   - Forming a k-clique makes you LOSE (opponent wins)
+   - Reverse/Misère variant - force opponent into bad positions
+   - Requires completely inverted strategy
 
 ## Core Components
 
@@ -63,18 +85,23 @@ All legacy vectorized MCTS implementations have been moved to `archive/vectorize
 - JIT-compiled training steps for maximum performance
 - Seamless integration with vectorized self-play
 
-### 2. Comprehensive Metrics
+### 2. Performance Optimization Flags
+- **`--use_true_mctx`**: Enables pure JAX MCTS with JAX primitives (lax.scan, lax.while_loop) for 5x faster self-play
+- **`--parallel_evaluation`**: Runs all 21 evaluation games simultaneously instead of sequentially for 10x faster evaluation
+- Both flags can be used together for maximum GPU utilization
+
+### 3. Comprehensive Metrics
 - Training losses (policy and value)
 - Win rates vs initial and previous models
 - Self-play performance tracking
 - Time breakdown per component
 
-### 3. Original-Style Visualization
+### 4. Original-Style Visualization
 - Single plot with 3 y-axes (matching original)
 - Policy loss, value loss, and win rate vs initial
 - Hyperparameters displayed in title
 
-### 4. Full Logging
+### 5. Full Logging
 - JSON logs with complete training history
 - Model checkpoints at each iteration
 - Self-play data saved for analysis

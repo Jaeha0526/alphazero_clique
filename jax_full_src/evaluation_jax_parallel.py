@@ -11,6 +11,7 @@ from vectorized_board import VectorizedCliqueBoard
 from vectorized_nn import ImprovedBatchedNeuralNetwork
 from mctx_final_optimized import MCTXFinalOptimized
 from mctx_true_jax import MCTXTrueJAX
+from ramsey_counterexample_saver import RamseyCounterexampleSaver
 
 
 def evaluate_vs_initial_and_best_parallel(
@@ -52,7 +53,9 @@ def evaluate_vs_initial_and_best_parallel(
         k=k,
         mcts_sims=mcts_sims,
         c_puct=c_puct,
-        temperature=temperature
+        temperature=temperature,
+        game_mode=config.get('game_mode', 'symmetric'),
+        python_eval=config.get('python_eval', False)
     )
     
     results = {
@@ -72,7 +75,9 @@ def evaluate_vs_initial_and_best_parallel(
             k=k,
             mcts_sims=mcts_sims,
             c_puct=c_puct,
-            temperature=temperature
+            temperature=temperature,
+            game_mode=config.get('game_mode', 'symmetric'),
+            python_eval=config.get('python_eval', False)
         )
         
         results.update({
@@ -103,7 +108,9 @@ def evaluate_models_parallel(
     k: int = 3,
     mcts_sims: int = 30,
     c_puct: float = 3.0,
-    temperature: float = 0.0
+    temperature: float = 0.0,
+    game_mode: str = 'symmetric',
+    python_eval: bool = False
 ) -> Dict[str, float]:
     """
     Evaluate two models against each other in parallel.
@@ -111,12 +118,17 @@ def evaluate_models_parallel(
     """
     start_time = time.time()
     
+    # Initialize Ramsey saver if in avoid_clique mode
+    ramsey_saver = None
+    if game_mode == "avoid_clique":
+        ramsey_saver = RamseyCounterexampleSaver()
+    
     # Create batch of games
     boards = VectorizedCliqueBoard(
         batch_size=num_games,
         num_vertices=num_vertices,
         k=k,
-        game_mode='symmetric'
+        game_mode=game_mode
     )
     
     # Alternate who starts - model1 starts in even games, model2 in odd games
@@ -125,8 +137,11 @@ def evaluate_models_parallel(
     # Create MCTS instances for both models
     num_actions = num_vertices * (num_vertices - 1) // 2
     
-    # Use True MCTX for maximum speed (same as self-play)
-    use_true_mctx = True  # Always use the fastest version
+    # Check if we should force Python MCTS for evaluation
+    use_true_mctx = not python_eval  # Use Python if python_eval is True
+    
+    if python_eval:
+        print("  Using Python MCTS for evaluation (no compilation overhead)")
     
     if use_true_mctx:
         mcts1 = MCTXTrueJAX(
@@ -188,21 +203,17 @@ def evaluate_models_parallel(
                 else:
                     probs = probs2[i]
                 
-                # Get valid moves and select best action
+                # Get valid moves and select action based on MCTS
                 valid_mask = boards.get_valid_moves_mask()[i]
                 masked_probs = probs * valid_mask
                 
-                # For temperature=0, argmax; otherwise sample
-                if temperature == 0:
+                # For evaluation, just pick the most visited action (like PyTorch)
+                if jnp.sum(masked_probs) > 0:
+                    # Simply take the action with highest probability (most visits)
                     action = jnp.argmax(masked_probs)
                 else:
-                    # Normalize and sample
-                    if jnp.sum(masked_probs) > 0:
-                        normalized = masked_probs / jnp.sum(masked_probs)
-                        action = np.random.choice(num_actions, p=np.array(normalized))
-                    else:
-                        valid_actions = jnp.where(valid_mask)[0]
-                        action = np.random.choice(valid_actions) if len(valid_actions) > 0 else 0
+                    valid_actions = jnp.where(valid_mask)[0]
+                    action = valid_actions[0] if len(valid_actions) > 0 else 0
                 
                 actions.append(int(action))
         
@@ -233,6 +244,15 @@ def evaluate_models_parallel(
                 model2_wins += 1
             else:  # Model2 was player 1, so model1 wins
                 model1_wins += 1
+    
+    # Save Ramsey counterexamples if in avoid_clique mode
+    if ramsey_saver is not None:
+        saved_files = ramsey_saver.save_batch_counterexamples(
+            boards=boards,
+            source="parallel_evaluation"
+        )
+        if saved_files:
+            print(f"  💎 Saved {len(saved_files)} Ramsey counterexamples!")
     
     eval_time = time.time() - start_time
     
