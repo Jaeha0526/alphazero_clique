@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AlphaZero Clique Game Visualizer</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+        }
+        
+        .graph-container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            min-height: 600px;
+        }
+        
+        .controls-container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .file-selector {
+            margin-bottom: 20px;
+        }
+        
+        .file-selector select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #667eea;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .game-selector {
+            margin-bottom: 20px;
+        }
+        
+        .game-selector label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        .game-selector select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        
+        .move-controls {
+            margin: 20px 0;
+        }
+        
+        .move-slider {
+            width: 100%;
+            margin: 10px 0;
+        }
+        
+        .move-info {
+            background: #f7f7f7;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        
+        .control-buttons {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        .btn {
+            padding: 10px 15px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        
+        .btn:hover {
+            background: #5a67d8;
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .btn-play {
+            background: #48bb78;
+        }
+        
+        .btn-play:hover {
+            background: #38a169;
+        }
+        
+        .info-panel {
+            background: #f7f7f7;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        
+        .info-panel h3 {
+            margin-bottom: 10px;
+            color: #667eea;
+        }
+        
+        .probability-bar {
+            margin: 5px 0;
+            background: #e0e0e0;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        
+        .probability-fill {
+            height: 20px;
+            background: #667eea;
+            display: flex;
+            align-items: center;
+            padding: 0 5px;
+            color: white;
+            font-size: 12px;
+        }
+        
+        #graph {
+            width: 100%;
+            height: 600px;
+        }
+        
+        .node {
+            stroke: #333;
+            stroke-width: 2px;
+            cursor: pointer;
+        }
+        
+        .node-label {
+            font-size: 14px;
+            font-weight: bold;
+            pointer-events: none;
+        }
+        
+        .edge {
+            fill: none;
+            stroke-width: 2px;
+        }
+        
+        .edge-uncolored {
+            stroke: #ddd;
+            stroke-width: 1px;
+        }
+        
+        .edge-player1 {
+            stroke: #ff4444;
+            stroke-width: 3px;
+        }
+        
+        .edge-player2 {
+            stroke: #4444ff;
+            stroke-width: 3px;
+        }
+        
+        .edge-current {
+            stroke: #ffcc00;
+            stroke-width: 5px;
+            stroke-dasharray: 5,5;
+            animation: dash 1s linear infinite;
+        }
+        
+        @keyframes dash {
+            to {
+                stroke-dashoffset: -10;
+            }
+        }
+        
+        .legend {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+        }
+        
+        .legend-color {
+            width: 30px;
+            height: 3px;
+            margin-right: 10px;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .stat-box {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎮 AlphaZero Clique Game Visualizer</h1>
+            <div id="game-info">Select a game file to begin</div>
+        </div>
+        
+        <div class="main-content">
+            <div class="graph-container">
+                <div style="position: relative;">
+                    <svg id="graph"></svg>
+                    <div class="legend">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #ff4444;"></div>
+                            <span>Player 1</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #4444ff;"></div>
+                            <span>Player 2</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #ffcc00;"></div>
+                            <span>Current Move</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="controls-container">
+                <div class="file-selector">
+                    <label>Select Game File:</label>
+                    <select id="fileSelect">
+                        <option value="">Loading files...</option>
+                    </select>
+                </div>
+                
+                <div class="game-selector">
+                    <label>Select Game:</label>
+                    <select id="gameSelect" disabled>
+                        <option value="">No file loaded</option>
+                    </select>
+                </div>
+                
+                <div class="move-controls">
+                    <label>Move: <span id="moveLabel">0 / 0</span></label>
+                    <input type="range" id="moveSlider" class="move-slider" min="0" max="0" value="0" disabled>
+                </div>
+                
+                <div class="control-buttons">
+                    <button class="btn" id="btnPrev" disabled>← Previous</button>
+                    <button class="btn" id="btnNext" disabled>Next →</button>
+                    <button class="btn" id="btnReset" disabled>↺ Reset</button>
+                    <button class="btn btn-play" id="btnPlay" disabled>▶ Play</button>
+                </div>
+                
+                <div class="move-info" id="moveInfo">
+                    <p>No move selected</p>
+                </div>
+                
+                <div class="info-panel">
+                    <h3>Top Move Probabilities</h3>
+                    <div id="probabilities"></div>
+                </div>
+                
+                <div class="stats">
+                    <div class="stat-box">
+                        <div class="stat-value" id="statP1">0</div>
+                        <div class="stat-label">Player 1 Edges</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="statP2">0</div>
+                        <div class="stat-label">Player 2 Edges</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="statUncolored">0</div>
+                        <div class="stat-label">Uncolored</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Global variables
+        let currentGameData = null;
+        let currentGame = 0;
+        let currentMove = 0;
+        let isPlaying = false;
+        let playInterval = null;
+        
+        // D3 graph elements
+        let svg, g, simulation, nodes, edges;
+        
+        // Initialize the application
+        async function init() {
+            setupGraph();
+            await loadFileList();
+            setupEventListeners();
+        }
+        
+        // Setup D3 graph
+        function setupGraph() {
+            const width = 800;
+            const height = 600;
+            
+            svg = d3.select('#graph')
+                .attr('width', width)
+                .attr('height', height);
+            
+            g = svg.append('g');
+            
+            // Add zoom behavior
+            svg.call(d3.zoom()
+                .scaleExtent([0.5, 3])
+                .on('zoom', (event) => {
+                    g.attr('transform', event.transform);
+                }));
+        }
+        
+        // Load list of available files
+        async function loadFileList() {
+            try {
+                const response = await fetch('/api/list_files');
+                const files = await response.json();
+                
+                const fileSelect = document.getElementById('fileSelect');
+                fileSelect.innerHTML = '<option value="">Select a file...</option>';
+                
+                files.forEach(file => {
+                    const option = document.createElement('option');
+                    option.value = file.path;
+                    option.textContent = file.name;
+                    fileSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading file list:', error);
+            }
+        }
+        
+        // Load game data from selected file
+        async function loadGameFile(filepath) {
+            if (!filepath) return;
+            
+            try {
+                const response = await fetch('/api/load_game' + filepath);
+                currentGameData = await response.json();
+                
+                // Update UI
+                document.getElementById('game-info').textContent = 
+                    `Iteration: ${currentGameData.iteration} | n=${currentGameData.n}, k=${currentGameData.k} | Mode: ${currentGameData.game_mode}`;
+                
+                // Update game selector
+                const gameSelect = document.getElementById('gameSelect');
+                gameSelect.innerHTML = '';
+                gameSelect.disabled = false;
+                
+                currentGameData.games.forEach((game, idx) => {
+                    const option = document.createElement('option');
+                    option.value = idx;
+                    option.textContent = `Game ${idx + 1} (${game.num_moves} moves)`;
+                    gameSelect.appendChild(option);
+                });
+                
+                // Load first game
+                loadGame(0);
+                
+            } catch (error) {
+                console.error('Error loading game file:', error);
+            }
+        }
+        
+        // Load specific game
+        function loadGame(gameIdx) {
+            currentGame = gameIdx;
+            currentMove = 0;
+            
+            const game = currentGameData.games[gameIdx];
+            
+            // Update move slider
+            const slider = document.getElementById('moveSlider');
+            slider.max = game.num_moves - 1;
+            slider.value = 0;
+            slider.disabled = false;
+            
+            // Enable buttons
+            document.getElementById('btnPrev').disabled = false;
+            document.getElementById('btnNext').disabled = false;
+            document.getElementById('btnReset').disabled = false;
+            document.getElementById('btnPlay').disabled = false;
+            
+            // Draw graph
+            drawGraph();
+            updateMoveDisplay();
+        }
+        
+        // Draw the graph
+        function drawGraph() {
+            g.selectAll('*').remove();
+            
+            const n = currentGameData.n;
+            const positions = currentGameData.node_positions;
+            
+            // Scale positions to fit SVG
+            const xScale = d3.scaleLinear()
+                .domain([-1, 1])
+                .range([100, 700]);
+            const yScale = d3.scaleLinear()
+                .domain([-1, 1])
+                .range([100, 500]);
+            
+            // Draw edges
+            const edgeGroup = g.append('g').attr('class', 'edges');
+            
+            currentGameData.edges.forEach(edge => {
+                const x1 = xScale(positions[edge.source][0]);
+                const y1 = yScale(positions[edge.source][1]);
+                const x2 = xScale(positions[edge.target][0]);
+                const y2 = yScale(positions[edge.target][1]);
+                
+                edgeGroup.append('line')
+                    .attr('class', 'edge edge-uncolored')
+                    .attr('id', `edge-${edge.id}`)
+                    .attr('x1', x1)
+                    .attr('y1', y1)
+                    .attr('x2', x2)
+                    .attr('y2', y2);
+            });
+            
+            // Draw nodes
+            const nodeGroup = g.append('g').attr('class', 'nodes');
+            
+            for (let i = 0; i < n; i++) {
+                const x = xScale(positions[i][0]);
+                const y = yScale(positions[i][1]);
+                
+                nodeGroup.append('circle')
+                    .attr('class', 'node')
+                    .attr('cx', x)
+                    .attr('cy', y)
+                    .attr('r', 20)
+                    .attr('fill', '#667eea');
+                
+                nodeGroup.append('text')
+                    .attr('class', 'node-label')
+                    .attr('x', x)
+                    .attr('y', y)
+                    .attr('text-anchor', 'middle')
+                    .attr('dy', '0.35em')
+                    .attr('fill', 'white')
+                    .text(i);
+            }
+            
+            updateEdgeColors();
+        }
+        
+        // Update edge colors based on current move
+        function updateEdgeColors() {
+            if (!currentGameData) return;
+            
+            const game = currentGameData.games[currentGame];
+            
+            // Reset all edges
+            d3.selectAll('.edge')
+                .attr('class', 'edge edge-uncolored');
+            
+            // Color edges up to current move
+            let p1Count = 0, p2Count = 0, uncoloredCount = currentGameData.edges.length;
+            
+            for (let i = 0; i <= currentMove && i < game.moves.length; i++) {
+                const move = game.moves[i];
+                if (move.top_actions && move.top_actions.length > 0) {
+                    const action = move.top_actions[0][0];
+                    const player = move.player;
+                    
+                    d3.select(`#edge-${action}`)
+                        .attr('class', `edge edge-player${player + 1}`);
+                    
+                    if (player === 0) p1Count++;
+                    else p2Count++;
+                    uncoloredCount--;
+                    
+                    // Highlight current move
+                    if (i === currentMove) {
+                        d3.select(`#edge-${action}`)
+                            .classed('edge-current', true);
+                    }
+                }
+            }
+            
+            // Update stats
+            document.getElementById('statP1').textContent = p1Count;
+            document.getElementById('statP2').textContent = p2Count;
+            document.getElementById('statUncolored').textContent = uncoloredCount;
+        }
+        
+        // Update move display
+        function updateMoveDisplay() {
+            const game = currentGameData.games[currentGame];
+            const move = game.moves[currentMove];
+            
+            // Update move label
+            document.getElementById('moveLabel').textContent = `${currentMove + 1} / ${game.num_moves}`;
+            document.getElementById('moveSlider').value = currentMove;
+            
+            // Update move info
+            let infoHtml = `<strong>Move ${currentMove + 1}</strong><br>`;
+            infoHtml += `Player: ${move.player + 1}<br>`;
+            if (move.player_role !== undefined) {
+                const role = move.player_role === 0 ? 'Attacker' : 'Defender';
+                infoHtml += `Role: ${role}<br>`;
+            }
+            infoHtml += `Value: ${move.value.toFixed(2)}`;
+            document.getElementById('moveInfo').innerHTML = infoHtml;
+            
+            // Update probabilities
+            const probDiv = document.getElementById('probabilities');
+            probDiv.innerHTML = '';
+            
+            if (move.top_actions) {
+                move.top_actions.slice(0, 5).forEach(([action, prob]) => {
+                    const edge = currentGameData.edges[action];
+                    const barDiv = document.createElement('div');
+                    barDiv.className = 'probability-bar';
+                    barDiv.innerHTML = `
+                        <div class="probability-fill" style="width: ${prob * 100}%">
+                            Edge (${edge.source},${edge.target}): ${(prob * 100).toFixed(1)}%
+                        </div>
+                    `;
+                    probDiv.appendChild(barDiv);
+                });
+            }
+            
+            updateEdgeColors();
+        }
+        
+        // Setup event listeners
+        function setupEventListeners() {
+            document.getElementById('fileSelect').addEventListener('change', (e) => {
+                loadGameFile(e.target.value);
+            });
+            
+            document.getElementById('gameSelect').addEventListener('change', (e) => {
+                loadGame(parseInt(e.target.value));
+            });
+            
+            document.getElementById('moveSlider').addEventListener('input', (e) => {
+                currentMove = parseInt(e.target.value);
+                updateMoveDisplay();
+            });
+            
+            document.getElementById('btnPrev').addEventListener('click', () => {
+                if (currentMove > 0) {
+                    currentMove--;
+                    updateMoveDisplay();
+                }
+            });
+            
+            document.getElementById('btnNext').addEventListener('click', () => {
+                const game = currentGameData.games[currentGame];
+                if (currentMove < game.num_moves - 1) {
+                    currentMove++;
+                    updateMoveDisplay();
+                }
+            });
+            
+            document.getElementById('btnReset').addEventListener('click', () => {
+                currentMove = 0;
+                updateMoveDisplay();
+            });
+            
+            document.getElementById('btnPlay').addEventListener('click', () => {
+                if (isPlaying) {
+                    stopPlay();
+                } else {
+                    startPlay();
+                }
+            });
+        }
+        
+        // Start auto-play
+        function startPlay() {
+            isPlaying = true;
+            document.getElementById('btnPlay').textContent = '⏸ Pause';
+            
+            playInterval = setInterval(() => {
+                const game = currentGameData.games[currentGame];
+                if (currentMove < game.num_moves - 1) {
+                    currentMove++;
+                    updateMoveDisplay();
+                } else {
+                    stopPlay();
+                }
+            }, 1000);
+        }
+        
+        // Stop auto-play
+        function stopPlay() {
+            isPlaying = false;
+            document.getElementById('btnPlay').textContent = '▶ Play';
+            if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+            }
+        }
+        
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>

@@ -626,6 +626,71 @@ def main():
         print(f"Games per second: {args.num_episodes / self_play_time:.1f}")
         print(f"Total training examples: {len(game_data)}")
         
+        # Save game data every 5 iterations for analysis
+        if iteration % 5 == 0:
+            game_data_dir = experiment_dir / "game_data"
+            game_data_dir.mkdir(parents=True, exist_ok=True)
+            game_data_path = game_data_dir / f'iteration_{iteration}.pkl'
+            print(f"\n💾 Saving game data to {game_data_path}")
+            
+            # Convert flat list of moves to structured game data
+            # Group moves by game (they come in sequential order from games)
+            games_to_save = []
+            sample_moves = game_data[:min(200, len(game_data))]  # Save first 200 moves (about 20 games)
+            
+            # Simple heuristic: group moves into rough games based on typical game length
+            avg_game_length = len(game_data) // args.num_episodes if args.num_episodes > 0 else 10
+            
+            current_game = []
+            game_count = 0
+            max_games = 10  # Save up to 10 games
+            
+            for i, move in enumerate(sample_moves):
+                current_game.append(move)
+                
+                # Start new game if we've reached typical game length or this is the last move
+                if len(current_game) >= avg_game_length or i == len(sample_moves) - 1:
+                    if game_count < max_games:
+                        game_info = {
+                            'game_index': game_count,
+                            'num_moves': len(current_game),
+                            'moves': []
+                        }
+                        
+                        for move_idx, move_data in enumerate(current_game):
+                            move_info = {
+                                'move': move_idx,
+                                'player': int(move_data['player']),
+                                'player_role': move_data.get('player_role'),
+                                'value': float(move_data['value']),
+                                # Convert policy to list of (action, prob) tuples for top 10 moves
+                                'top_actions': sorted(
+                                    [(int(i), float(p)) for i, p in enumerate(move_data['policy'])],
+                                    key=lambda x: x[1],
+                                    reverse=True
+                                )[:10]
+                            }
+                            game_info['moves'].append(move_info)
+                        
+                        games_to_save.append(game_info)
+                        game_count += 1
+                    
+                    current_game = []
+            
+            # Save the processed game data
+            with open(game_data_path, 'wb') as f:
+                pickle.dump({
+                    'iteration': iteration,
+                    'total_training_examples': len(game_data),
+                    'num_games_played': args.num_episodes,
+                    'sample_games': games_to_save,
+                    'game_mode': 'asymmetric' if args.asymmetric else 'avoid_clique' if args.avoid_clique else 'symmetric',
+                    'vertices': args.vertices,
+                    'k': args.k,
+                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                }, f)
+            print(f"  Saved {len(games_to_save)} sample games for analysis")
+        
         # Train network
         print(f"\nTraining network for {args.num_epochs} epochs...")
         start_time = time.time()

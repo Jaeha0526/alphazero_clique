@@ -577,6 +577,62 @@ The sweep optimizes for `validation_policy_loss` minimization. Key metrics to mo
 - **Training Stability**: Avoid value loss collapse (< 1e-6)
 - **Win Rate vs Initial**: Should improve to > 0.3 for effective learning
 
+## Game Data Analysis
+
+The JAX implementation automatically saves sample game data every 5 iterations for analyzing learning progress.
+
+### Saved Data
+
+Game data is saved at iterations 0, 5, 10, 15, etc. in the experiment directory:
+```
+experiments/your_experiment/
+├── game_data/
+│   ├── iteration_0.pkl     # Initial random play
+│   ├── iteration_5.pkl     # After 5 iterations
+│   ├── iteration_10.pkl    # After 10 iterations
+│   └── ...
+```
+
+Each file contains:
+- Sample of 10 games from that iteration
+- Move-by-move data including:
+  - Player who made each move
+  - MCTS policy (top 10 action probabilities)
+  - Final value assignment for training
+- Metadata (iteration, timestamp, game configuration)
+
+### Analyzing Game Data
+
+Use the included analysis script to examine learning progress:
+
+```bash
+# Analyze a single iteration
+python jax_full_src/analyze_game_data.py experiments/your_experiment/game_data/iteration_10.pkl
+
+# Compare across all iterations to track learning
+python jax_full_src/analyze_game_data.py experiments/your_experiment/game_data/ --compare
+```
+
+The analysis shows:
+- **Game Length Trends**: Whether games get shorter (finding wins faster) or longer (more defensive play)
+- **Policy Entropy**: Confidence in move selection (lower entropy = more confident)
+- **Move-by-Move Analysis**: Detailed view of first few games
+- **Learning Indicators**: Automated assessment of whether the model is improving
+
+### Interpreting Results
+
+Good learning indicators:
+- ✓ Decreasing policy entropy over iterations (model becoming more confident)
+- ✓ Consistent game lengths or slight decrease (finding efficient strategies)
+- ✓ Clear preference for certain moves in opening positions
+
+Warning signs:
+- ⚠ Increasing entropy (model becoming less certain)
+- ⚠ Dramatic changes in game length (unstable learning)
+- ⚠ Random-looking policies even after many iterations
+
+This analysis helps verify the AI is learning meaningful strategies rather than just memorizing patterns.
+
 ## License
 
 [Add your license information here]
