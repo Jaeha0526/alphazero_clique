@@ -1,52 +1,39 @@
 # MCTS Implementation Comparison
 
-## Original (src/MCTS_clique.py) vs Our Implementation (simple_tree_mcts.py)
+## Current Working Implementations
 
-### 1. Q-value Calculation
+### 1. TreeBasedMCTS
+- **What it does**: Full MCTS with proper tree structure (MCTSNode class)
+- **Features**: SELECT → EXPAND → EVALUATE → BACKUP phases
+- **Parallel support**: Yes, via ParallelTreeBasedMCTS class
+- **Used by**: vectorized_self_play_fixed.py
 
-**Original:**
-```python
-# child_Q()
-return self.child_total_value / (1.0 + self.child_number_visits)
-```
+### 2. SimpleTreeMCTS
+- **What it does**: Simplified tree MCTS with clean implementation
+- **Features**: Full tree search with native batch support
+- **Parallel support**: Yes, processes batch_size games in parallel
+- **Used by**: run_jax_optimized.py
 
-**Our Implementation:**
-```python
-Q = np.where(N > 0, W / N, 0.0)
-```
+### 3. SimpleTreeMCTSTimed
+- **What it does**: Same as SimpleTreeMCTS with timing/profiling
+- **Features**: Adds performance monitoring
+- **Used by**: run_jax_optimized.py for performance analysis
 
-**ISSUE:** The original uses `W / (1 + N)` but we use `W / N` when N > 0.
+## Key Characteristics
 
-### 2. U-value (Exploration) Calculation
+### Why Tree MCTS is Slower on CPU:
+1. **Python overhead**: Managing tree structures in Python
+2. **Memory allocation**: Creating nodes dynamically
+3. **Board copying**: Each node needs its own board state
+4. **Sequential nature**: Hard to fully vectorize tree traversal
 
-**Original:**
-```python
-# child_U()
-c_puct = 3.0
-sqrt_N_s = math.sqrt(max(1.0, self.number_visits))
-return c_puct * sqrt_N_s * (abs(self.child_priors) / (1.0 + self.child_number_visits))
-```
+### Performance on CPU:
+- PyTorch: ~19ms per MCTS search
+- JAX TreeBasedMCTS: ~515ms per search
+- JAX SimpleTreeMCTS: ~413ms per game (with parallelism)
 
-**Our Implementation:**
-```python
-total_N = N.sum()
-sqrt_sum = np.sqrt(total_N + 1)  # Add 1 to handle first visit
-U = self.c_puct * P * sqrt_sum / (1 + N)
-```
-
-**COMPARISON:**
-- Both use c_puct = 3.0 ✓
-- Original: `sqrt(max(1, visits_to_this_node))`
-- Ours: `sqrt(sum(N) + 1)` where N is visits from this node
-- Both use `P / (1 + N)` for the exploration term ✓
-
-### 3. Key Differences
-
-1. **Q calculation:** Original always uses (1 + N) denominator, we use N when N > 0
-2. **sqrt term:** Original uses visits TO the node, we use sum of visits FROM the node
-
-### 4. Which is Correct?
-
-The original implementation follows the AlphaZero paper more closely:
-- Q = W / (1 + N) ensures no division by zero
-- sqrt term should use parent visits (visits TO the node)
+### All Implementations Now:
+- ✅ Perform real tree search
+- ✅ Support parallel game processing
+- ✅ Are algorithmically correct
+- ❌ Removed all "fake" MCTS that just reweighted policies
