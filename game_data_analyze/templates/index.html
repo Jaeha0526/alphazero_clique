@@ -411,7 +411,7 @@
             if (!filepath) return;
             
             try {
-                const response = await fetch('/api/load_game' + filepath);
+                const response = await fetch('/api/load_game?file=' + encodeURIComponent(filepath));
                 currentGameData = await response.json();
                 
                 // Update UI

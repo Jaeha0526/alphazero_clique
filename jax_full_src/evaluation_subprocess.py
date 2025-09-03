@@ -70,7 +70,7 @@ print(f"Worker {worker_id} completed: {{results['model1_wins']}} vs {{results['m
         ['python', '-c', code],
         capture_output=True,
         text=True,
-        cwd='/workspace/alphazero_clique/jax_full_src'
+        cwd='jax_full_src'
     )
     
     if result.returncode != 0:
@@ -153,7 +153,7 @@ os.environ['JAX_DISABLE_JIT'] = 'False'  # Keep JIT for CPU performance
 
 import pickle
 import sys
-sys.path.append('/workspace/alphazero_clique/jax_full_src')
+sys.path.append('jax_full_src')
 
 from standalone_evaluation import load_model
 from evaluation_jax_parallel import evaluate_models_parallel

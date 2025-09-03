@@ -94,7 +94,7 @@ def list_files():
     files = []
     
     # Look for game data files
-    experiments_dir = Path('/workspace/alphazero_clique/experiments')
+    experiments_dir = Path('../experiments')
     if experiments_dir.exists():
         for exp_dir in experiments_dir.iterdir():
             if exp_dir.is_dir():
@@ -111,10 +111,12 @@ def list_files():
     return jsonify(files)
 
 
-@app.route('/api/load_game/<path:filepath>')
-def load_game(filepath):
+@app.route('/api/load_game')
+def load_game():
     """Load a specific game file."""
-    filepath = '/' + filepath  # Flask removes leading slash
+    filepath = request.args.get('file')
+    if not filepath:
+        return jsonify({'error': 'No file specified'}), 400
     
     if not Path(filepath).exists():
         return jsonify({'error': 'File not found'}), 404
@@ -175,8 +177,8 @@ if __name__ == '__main__':
     print("AlphaZero Clique Game Visualizer")
     print("="*60)
     print("\nStarting web server...")
-    print("Open your browser and navigate to: http://localhost:5000")
+    print("Open your browser and navigate to: http://localhost:5001")
     print("\nPress Ctrl+C to stop the server")
     print("="*60 + "\n")
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5001)

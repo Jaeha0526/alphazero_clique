@@ -72,12 +72,42 @@ In avoid_clique mode:
 - Successful games (draws) mean both players avoided k-cliques
 - These draws are potential Ramsey counterexamples
 
+### Understanding Temperature Annealing and Move Probabilities
+
+**Why do later moves show very high probabilities (near 1.0)?**
+
+This is completely normal and expected due to **temperature annealing** in MCTS during self-play:
+
+#### Temperature Schedule Used:
+- **Early game (0-20% of moves)**: τ = 1.0 (high exploration)
+- **Early-mid game (20-40%)**: τ = 0.8 (good exploration) 
+- **Mid game (40-60%)**: τ = 0.5 (balanced)
+- **Late-mid game (60-80%)**: τ = 0.2 (more exploitation)
+- **End game (80-100%)**: τ = 0.1 (strong exploitation)
+
+#### What This Means:
+- **Low temperature** (τ → 0) makes the policy very deterministic, heavily favoring the most-visited MCTS action
+- **High temperature** (τ = 1) creates more uniform exploration across viable moves
+- **By iteration 5**: The model has learned strong strategic preferences, so MCTS visit counts become concentrated on the "best" moves
+
+#### Comparison to AlphaZero Original:
+- **Original AlphaZero**: τ = 1.0 for first 30 moves, then τ ≈ 0.0
+- **Our implementation**: Gradual 5-phase annealing (potentially superior for learning)
+- **Both approaches**: Essential for generating quality training data
+
+#### This is Training Success:
+- **Early iterations**: More random, diverse move probabilities
+- **Later iterations**: Confident, strategic move selection
+- **High probabilities**: Indicate the model has learned clear preferences and strategies
+
 ### Tips for Analysis
 
-1. **Watch for forced moves**: Low entropy (one high probability) indicates forced moves
-2. **Observe learning progress**: Compare early iterations (random) vs later (strategic)
-3. **Identify patterns**: Look for common opening moves or defensive strategies
-4. **Check game endings**: See if players are learning to avoid losing moves
+1. **Temperature effects**: Early moves (~0.04 max prob) vs later moves (1.0 prob) show learning progression
+2. **Watch for forced moves**: Low entropy (one high probability) indicates forced moves or strong strategic preferences
+3. **Observe learning progress**: Compare early iterations (random) vs later (strategic)
+4. **Identify patterns**: Look for common opening moves or defensive strategies
+5. **Check game endings**: See if players are learning to avoid losing moves
+6. **Iteration comparison**: Compare probability distributions between iteration_0.pkl and iteration_5.pkl
 
 ### Requirements
 
