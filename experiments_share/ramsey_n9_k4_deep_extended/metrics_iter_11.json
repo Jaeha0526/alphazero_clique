@@ -1,0 +1,48 @@
+{
+  "iteration": 11,
+  "config": {
+    "game_mode": "avoid_clique",
+    "num_vertices": 9,
+    "k": 4,
+    "mcts_sims": 200
+  },
+  "self_play_time": 583.4601016044617,
+  "training_time": 4.2494916915893555,
+  "eval_time": 206.48180103302002,
+  "games_per_second": 0.2570869877606263,
+  "total_examples": 4444,
+  "total_time": 794.191394329071,
+  "validation_policy_loss": 1.2362855434417725,
+  "validation_value_loss": 0.342442187666893,
+  "evaluation_win_rate_vs_initial": 0.07317073170731707,
+  "evaluation_win_rate_vs_best": 0.36585365853658536,
+  "best_model_iteration": 1,
+  "timestamp": "2025-09-07T11:07:09.009999",
+  "selfplay_stats": {
+    "avg_game_length": 29.195757575757575,
+    "total_games_played": 1650,
+    "game_length_distribution": {
+      "12": 1,
+      "14": 4,
+      "16": 25,
+      "18": 62,
+      "20": 102,
+      "21": 3,
+      "22": 167,
+      "23": 4,
+      "24": 106,
+      "25": 19,
+      "26": 101,
+      "27": 47,
+      "28": 62,
+      "29": 86,
+      "30": 36,
+      "31": 116,
+      "32": 21,
+      "33": 109,
+      "34": 8,
+      "35": 197,
+      "36": 374
+    }
+  }
+}
