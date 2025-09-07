@@ -1,76 +1,69 @@
-# Game Data Analysis Tools
+# Game Data Web Visualizer
 
-This directory contains tools for analyzing and visualizing AlphaZero Clique Game training data.
+A Flask-based web application for visualizing AlphaZero Clique Game training and evaluation data.
 
-## Interactive Game Viewer
+## Features
 
-An interactive matplotlib-based tool to visualize game trajectories from saved game data.
+- **Interactive Graph Visualization**: View game states as colored graphs with real-time updates
+- **Game Replay Controls**: Step through moves manually or auto-play with adjustable speed
+- **Move Probability Display**: See the top action probabilities for each move
+- **Support for Both Data Types**:
+  - Training games from self-play
+  - Evaluation games showing model comparisons
+- **Game Statistics**: View win rates, game lengths, and complete game counts
+- **File Browser**: Easy navigation through all experiments and iterations
 
-### Features
+## Usage
 
-- **Load any game data file** from training (iteration_0.pkl, iteration_5.pkl, etc.)
-- **Select specific games** to visualize from the saved samples
-- **Step through moves** manually with Previous/Next buttons
-- **Auto-play** game trajectories with adjustable speed
-- **Visual graph display** showing:
-  - Red edges: Player 1's moves
-  - Blue edges: Player 2's moves  
-  - Yellow highlight: Current move
-  - Gray edges: Uncolored edges
-- **Move probability display** showing top 10 action probabilities
-- **Game information** including player, value, and best move details
-
-### Usage
+### Starting the Web Server
 
 ```bash
-# View a specific game data file
-python game_data_analyze/interactive_game_viewer.py experiments/your_experiment/game_data/iteration_0.pkl
-
-# Example with the n13k4_ramsey experiment
-python game_data_analyze/interactive_game_viewer.py experiments/n13k4_ramsey/game_data/iteration_0.pkl
+cd game_data_analyze
+python app.py
 ```
 
-### Controls
+Then open your browser and navigate to: http://localhost:5000
 
-- **Game selector**: Enter game index (0 to N-1) to switch between games
-- **Move slider**: Drag to jump to any move in the game
-- **Previous/Next buttons**: Step through moves one at a time
-- **Play/Pause button**: Auto-play the game trajectory
-- **Reset button**: Return to the first move
-- **Speed slider**: Adjust auto-play speed (0.5x to 3x)
+### Interface Overview
 
-### Understanding the Display
+1. **Left Sidebar**: Lists all available game data files
+   - Green badges = training games
+   - Orange badges = evaluation games
+   - Click any file to load it
 
-1. **Graph View** (left panel):
-   - Shows the complete graph with n vertices
-   - Edges are colored as players make moves
-   - Current move is highlighted in yellow
-   - Node labels show vertex indices
+2. **Main Canvas**: Interactive graph visualization
+   - Red edges = Player 0 moves
+   - Blue edges = Player 1 moves  
+   - Yellow highlight = Current move
+   - Gray edges = Uncolored edges
 
-2. **Probability Chart** (right panel):
-   - Bar chart of top 10 move probabilities
-   - Yellow bar indicates the selected move
-   - Higher probability = more confident move
+3. **Controls**:
+   - Game selector dropdown
+   - Move slider for quick navigation
+   - Previous/Next buttons for step-by-step viewing
+   - Play/Pause for automatic replay
+   - Speed control (0.5x to 3x)
 
-3. **Information Panel** (bottom):
-   - Current iteration, game mode
-   - Active player and their role (if asymmetric)
-   - Final value for this position (+1 for win, -1 for loss)
-   - Best move details with probability
+4. **Info Panel**: 
+   - Game statistics (wins, draws, average length)
+   - Current move details
+   - Move probabilities with visual bars
+   - Game result on final move
 
-### Game Modes
+## Data Format Support
+
+The visualizer works with the new data format:
+- **Training games**: `training_data` + `games_info` structure
+- **Evaluation games**: `games_data` + `games_info` structure
+- Automatically detects and handles both formats
+
+## Understanding Game Modes
 
 - **Symmetric**: Both players try to form k-cliques
 - **Asymmetric**: Attacker forms cliques, Defender prevents
 - **Avoid_clique**: Both players avoid forming k-cliques (forming one = losing)
 
-### Interpreting Avoid_Clique Games
-
-In avoid_clique mode:
-- Players take turns coloring edges
-- If a player creates a k-clique in their color, they LOSE
-- Successful games (draws) mean both players avoided k-cliques
-- These draws are potential Ramsey counterexamples
+In avoid_clique mode, complete games (all edges colored) are potential Ramsey counterexamples!
 
 ### Understanding Temperature Annealing and Move Probabilities
 
@@ -109,15 +102,15 @@ This is completely normal and expected due to **temperature annealing** in MCTS 
 5. **Check game endings**: See if players are learning to avoid losing moves
 6. **Iteration comparison**: Compare probability distributions between iteration_0.pkl and iteration_5.pkl
 
-### Requirements
+## Requirements
 
 ```bash
-pip install matplotlib networkx numpy
+pip install flask networkx numpy
 ```
 
-### Troubleshooting
+## Tips
 
-If the viewer doesn't open:
-- Ensure you have a display available (X11 forwarding for SSH)
-- Try saving figures instead: modify script to use `plt.savefig()`
-- Use a Jupyter notebook version (can be created on request)
+1. **Identify Critical Moves**: Low entropy (one high probability) indicates forced defensive moves
+2. **Compare Iterations**: Load different iterations to see learning progress
+3. **Spot Patterns**: Look for common opening moves or defensive strategies
+4. **Check Endings**: In avoid_clique mode, see if games end with 4-clique formation or complete coloring

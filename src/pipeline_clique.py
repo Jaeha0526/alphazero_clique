@@ -433,6 +433,29 @@ def run_iteration(iteration: int, args: argparse.Namespace, data_dir: str, model
         print("No training examples found for current iteration. Skipping training and evaluation.")
         return
     print(f"Loaded {len(all_examples)} examples for training.")
+    
+    # Save game data if requested
+    if args.save_full_game_data:
+        game_data_dir = os.path.join(model_dir, "../game_data")
+        os.makedirs(game_data_dir, exist_ok=True)
+        game_data_path = os.path.join(game_data_dir, f"iteration_{iteration}.pkl")
+        
+        print(f"\n💾 Saving FULL game data to {game_data_path} (--save-full-game-data enabled)")
+        
+        # Save the raw training examples
+        import pickle
+        import time
+        with open(game_data_path, 'wb') as f:
+            pickle.dump({
+                'iteration': iteration,
+                'total_training_examples': len(all_examples),
+                'training_examples': all_examples,  # Full raw data
+                'game_mode': game_mode,
+                'vertices': num_vertices,
+                'k': clique_size,
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+            }, f)
+        print(f"  Saved {len(all_examples)} training examples")
 
     # --- 4. Train New Model (train_network saves iterN model) --- 
     print("Starting training process...")
@@ -1207,6 +1230,8 @@ if __name__ == "__main__":
     parser.add_argument("--eval-threshold", type=float, default=0.55, help="Win rate threshold to update best model")
     parser.add_argument("--num-cpus", type=int, default=4, help="Number of CPUs for parallel self-play")
     parser.add_argument("--experiment-name", type=str, default="default", help="Name for organizing data/models")
+    parser.add_argument("--save-full-game-data", action='store_true', 
+                        help="Save complete game data every iteration (default: not saved)")
     
     # Model parameters
     parser.add_argument("--hidden-dim", type=int, default=64, help="Hidden dimension size in GNN layers")

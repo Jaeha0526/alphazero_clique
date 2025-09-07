@@ -64,6 +64,7 @@ class OptimizedSelfPlay:
     def play_games(self, neural_network, num_games, iteration=None):
         """Play games using optimized MCTS."""
         all_game_data = []
+        all_games_info = []  # Track individual game information
         games_played = 0
         
         # Reset statistics for this batch
@@ -142,15 +143,21 @@ class OptimizedSelfPlay:
                 
                 # Store data for training
                 edge_indices, edge_features = boards.get_features_for_nn_undirected()
+                temp_move_data = []  # Store temporarily to add actions
                 for i in range(batch_size):
                     if boards.game_states[i] == 0:
-                        game_data[i].append({
+                        move_data = {
                             'edge_indices': edge_indices[i],
                             'edge_features': edge_features[i],
                             'policy': mcts_probs[i],
                             'player': boards.current_players[i],
-                            'player_role': int(boards.current_players[i]) if self.config.game_mode == "asymmetric" else None
-                        })
+                            'player_role': int(boards.current_players[i]) if self.config.game_mode == "asymmetric" else None,
+                            'action': None  # Will be filled after action selection
+                        }
+                        temp_move_data.append(move_data)
+                        game_data[i].append(move_data)
+                    else:
+                        temp_move_data.append(None)
                 
                 # Sample actions
                 active_mask = boards.game_states == 0
@@ -172,6 +179,9 @@ class OptimizedSelfPlay:
                         probs = probs / probs.sum()
                         action = np.random.choice(num_actions, p=probs)
                         actions.append(action)
+                        # Save the action taken to the move data
+                        if temp_move_data[i] is not None:
+                            temp_move_data[i]['action'] = int(action)
                     else:
                         actions.append(0)
                 
@@ -194,6 +204,16 @@ class OptimizedSelfPlay:
                         batch_stats['attacker_wins'] += 1
                     elif winner == 1:  # Defender wins
                         batch_stats['defender_wins'] += 1
+                
+                # Store info about this individual game
+                game_info = {
+                    'game_id': games_played + i,
+                    'winner': winner,
+                    'num_moves': game_length,
+                    'start_idx': len(all_game_data),  # Where this game starts in the flat list
+                    'end_idx': len(all_game_data) + game_length  # Where it ends
+                }
+                all_games_info.append(game_info)
                 
                 for move_data in game_data[i]:
                     # Perspective-based value
@@ -222,6 +242,9 @@ class OptimizedSelfPlay:
         
         # Print statistics summary
         self._print_statistics_summary(batch_stats)
+            
+        # Store the games info for later use
+        self.last_games_info = all_games_info
             
         return all_game_data
     
@@ -473,6 +496,8 @@ def main():
                         help='Use subprocess parallelization for evaluation')
     parser.add_argument('--eval_num_cpus', type=int, default=4,
                         help='Number of CPUs for subprocess evaluation')
+    parser.add_argument('--save_full_game_data', action='store_true',
+                        help='Save complete game data every iteration (default: every 5 iterations)')
     
     args = parser.parse_args()
     
@@ -626,70 +651,55 @@ def main():
         print(f"Games per second: {args.num_episodes / self_play_time:.1f}")
         print(f"Total training examples: {len(game_data)}")
         
-        # Save game data every 5 iterations for analysis
-        if iteration % 5 == 0:
+        # Get self-play statistics for saving
+        selfplay_stats = self_play.get_statistics()
+        
+        # Save game data based on configuration
+        # Always save if save_full_game_data is True, otherwise every 5 iterations
+        if args.save_full_game_data or iteration % 5 == 0:
             game_data_dir = experiment_dir / "game_data"
             game_data_dir.mkdir(parents=True, exist_ok=True)
             game_data_path = game_data_dir / f'iteration_{iteration}.pkl'
-            print(f"\n💾 Saving game data to {game_data_path}")
             
-            # Convert flat list of moves to structured game data
-            # Group moves by game (they come in sequential order from games)
-            games_to_save = []
-            sample_moves = game_data[:min(200, len(game_data))]  # Save first 200 moves (about 20 games)
+            # Determine what to save based on mode
+            if args.save_full_game_data:
+                print(f"\n💾 Saving FULL training data to {game_data_path} (--save_full_game_data enabled)")
+                data_to_save = game_data  # Save ALL training examples
+            else:
+                print(f"\n💾 Saving sample training data to {game_data_path}")
+                # Save a sample of training examples (first 10% or 1000, whichever is smaller)
+                sample_size = min(1000, len(game_data) // 10)
+                data_to_save = game_data[:sample_size]
             
-            # Simple heuristic: group moves into rough games based on typical game length
-            avg_game_length = len(game_data) // args.num_episodes if args.num_episodes > 0 else 10
-            
-            current_game = []
-            game_count = 0
-            max_games = 10  # Save up to 10 games
-            
-            for i, move in enumerate(sample_moves):
-                current_game.append(move)
-                
-                # Start new game if we've reached typical game length or this is the last move
-                if len(current_game) >= avg_game_length or i == len(sample_moves) - 1:
-                    if game_count < max_games:
-                        game_info = {
-                            'game_index': game_count,
-                            'num_moves': len(current_game),
-                            'moves': []
-                        }
-                        
-                        for move_idx, move_data in enumerate(current_game):
-                            move_info = {
-                                'move': move_idx,
-                                'player': int(move_data['player']),
-                                'player_role': move_data.get('player_role'),
-                                'value': float(move_data['value']),
-                                # Convert policy to list of (action, prob) tuples for top 10 moves
-                                'top_actions': sorted(
-                                    [(int(i), float(p)) for i, p in enumerate(move_data['policy'])],
-                                    key=lambda x: x[1],
-                                    reverse=True
-                                )[:10]
-                            }
-                            game_info['moves'].append(move_info)
-                        
-                        games_to_save.append(game_info)
-                        game_count += 1
-                    
-                    current_game = []
-            
-            # Save the processed game data
+            # Save the raw training data with game boundary information
+            # Each item in game_data is a move with board state, policy, value, etc.
             with open(game_data_path, 'wb') as f:
                 pickle.dump({
                     'iteration': iteration,
                     'total_training_examples': len(game_data),
                     'num_games_played': args.num_episodes,
-                    'sample_games': games_to_save,
+                    'training_data': data_to_save,  # Raw training examples
+                    'games_info': self_play.last_games_info if hasattr(self_play, 'last_games_info') else [],  # Game boundaries
+                    'is_full_data': args.save_full_game_data,
+                    'num_examples_saved': len(data_to_save),
                     'game_mode': 'asymmetric' if args.asymmetric else 'avoid_clique' if args.avoid_clique else 'symmetric',
                     'vertices': args.vertices,
                     'k': args.k,
-                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                    # Include game statistics from the actual self-play
+                    'game_stats': {
+                        'avg_game_length': selfplay_stats.get('avg_game_length', 0),
+                        'game_length_distribution': selfplay_stats.get('game_length_distribution', {}),
+                        'total_moves': selfplay_stats.get('total_moves', 0),
+                        'attacker_wins': selfplay_stats.get('attacker_wins', 0),
+                        'defender_wins': selfplay_stats.get('defender_wins', 0),
+                    }
                 }, f)
-            print(f"  Saved {len(games_to_save)} sample games for analysis")
+            
+            if args.save_full_game_data:
+                print(f"  Saved ALL {len(data_to_save)} training examples")
+            else:
+                print(f"  Saved {len(data_to_save)} sample training examples")
         
         # Train network
         print(f"\nTraining network for {args.num_epochs} epochs...")
@@ -768,142 +778,142 @@ def main():
         else:
             # Evaluate against initial model with command-line overrides
             eval_config = {
-            'num_games': args.eval_games if args.eval_games else (40 if args.asymmetric else 21),
-            'num_vertices': args.vertices,
-            'k': args.k,
-            'game_mode': config.game_mode,  # Use the game_mode from config
-            'mcts_sims': args.eval_mcts_sims if args.eval_mcts_sims else 30,
-            'c_puct': 3.0,
-            'use_true_mctx': False if args.python_eval else config.use_true_mctx,  # Override for evaluation
-            'python_eval': args.python_eval  # Pass the flag
-        }
-        
-        # Use enhanced evaluation for asymmetric games
-        if args.asymmetric:
-            if args.parallel_evaluation:
-                print("Using PARALLEL asymmetric evaluation")
-                eval_results = evaluate_vs_initial_and_best_asymmetric_parallel(
-                    current_model=model,
-                    initial_model=initial_model,
-                    best_model=best_model if iteration > 0 else None,  # Skip best eval in first iteration
-                    config=eval_config
-                )
-            else:
-                eval_results = evaluate_vs_initial_and_best_asymmetric(
-                    current_model=model,
-                    initial_model=initial_model,
-                    best_model=best_model if iteration > 0 else None,  # Skip best eval in first iteration
-                    config=eval_config
-                )
-            win_rate_vs_initial = eval_results['win_rate_vs_initial']
-            attacker_rate = eval_results['vs_initial_attacker_rate']
-            defender_rate = eval_results['vs_initial_defender_rate']
-            eval_time = eval_results['vs_initial_details']['eval_time']
+                'num_games': args.eval_games if args.eval_games else (40 if args.asymmetric else 21),
+                'num_vertices': args.vertices,
+                'k': args.k,
+                'game_mode': config.game_mode,  # Use the game_mode from config
+                'mcts_sims': args.eval_mcts_sims if args.eval_mcts_sims else 30,
+                'c_puct': 3.0,
+                'use_true_mctx': False if args.python_eval else config.use_true_mctx,  # Override for evaluation
+                'python_eval': args.python_eval  # Pass the flag
+            }
             
-            print(f"\nDetailed Asymmetric Results:")
-            print(f"  As Attacker: {attacker_rate:.1%}")
-            print(f"  As Defender: {defender_rate:.1%}")
-        else:
-            if args.subprocess_eval:
-                # Use subprocess parallelization for evaluation
-                print(f"Using SUBPROCESS evaluation with {args.eval_num_cpus} CPUs")
+            # Use enhanced evaluation for asymmetric games
+            if args.asymmetric:
+                if args.parallel_evaluation:
+                    print("Using PARALLEL asymmetric evaluation")
+                    eval_results = evaluate_vs_initial_and_best_asymmetric_parallel(
+                        current_model=model,
+                        initial_model=initial_model,
+                        best_model=best_model if iteration > 0 else None,  # Skip best eval in first iteration
+                        config=eval_config
+                    )
+                else:
+                    eval_results = evaluate_vs_initial_and_best_asymmetric(
+                        current_model=model,
+                        initial_model=initial_model,
+                        best_model=best_model if iteration > 0 else None,  # Skip best eval in first iteration
+                        config=eval_config
+                    )
+                win_rate_vs_initial = eval_results['win_rate_vs_initial']
+                attacker_rate = eval_results['vs_initial_attacker_rate']
+                defender_rate = eval_results['vs_initial_defender_rate']
+                eval_time = eval_results['vs_initial_details']['eval_time']
                 
-                # Save current model to temp checkpoint for subprocess evaluation
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as tmp_current:
-                    current_checkpoint = {
-                        'params': model.params,
-                        'model_config': {
-                            'num_vertices': model.num_vertices,
-                            'hidden_dim': model.hidden_dim,
-                            'num_gnn_layers': model.num_layers,
-                            'asymmetric_mode': model.asymmetric_mode
-                        }
-                    }
-                    with open(tmp_current.name, 'wb') as f:
-                        pickle.dump(current_checkpoint, f)
-                    current_path = tmp_current.name
-                
-                # Save initial model to temp checkpoint
-                with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as tmp_initial:
-                    initial_checkpoint = {
-                        'params': initial_model.params,
-                        'model_config': {
-                            'num_vertices': initial_model.num_vertices,
-                            'hidden_dim': initial_model.hidden_dim,
-                            'num_gnn_layers': initial_model.num_layers,
-                            'asymmetric_mode': initial_model.asymmetric_mode
-                        }
-                    }
-                    with open(tmp_initial.name, 'wb') as f:
-                        pickle.dump(initial_checkpoint, f)
-                    initial_path = tmp_initial.name
-                
-                # Evaluate vs initial
-                initial_results = evaluate_models_subprocess_parallel(
-                    model1_path=current_path,
-                    model2_path=initial_path,
-                    num_games=eval_config['num_games'],
-                    num_cpus=args.eval_num_cpus,
-                    config=eval_config
-                )
-                
-                # Build results dict
-                eval_results = {
-                    'win_rate_vs_initial': initial_results['model1_win_rate'],
-                    'draw_rate_vs_initial': initial_results.get('draw_rate', 0),
-                    'eval_time_vs_initial': initial_results['eval_time'],
-                    'vs_initial_details': initial_results
-                }
-                
-                # Evaluate vs best if not first iteration
-                if iteration > 0 and best_model is not None:
-                    # Save best model to temp checkpoint
-                    with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as tmp_best:
-                        best_checkpoint = {
-                            'params': best_model.params,
+                print(f"\nDetailed Asymmetric Results:")
+                print(f"  As Attacker: {attacker_rate:.1%}")
+                print(f"  As Defender: {defender_rate:.1%}")
+            else:
+                if args.subprocess_eval:
+                    # Use subprocess parallelization for evaluation
+                    print(f"Using SUBPROCESS evaluation with {args.eval_num_cpus} CPUs")
+                    
+                    # Save current model to temp checkpoint for subprocess evaluation
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as tmp_current:
+                        current_checkpoint = {
+                            'params': model.params,
                             'model_config': {
-                                'num_vertices': best_model.num_vertices,
-                                'hidden_dim': best_model.hidden_dim,
-                                'num_gnn_layers': best_model.num_layers,
-                                'asymmetric_mode': best_model.asymmetric_mode
+                                'num_vertices': model.num_vertices,
+                                'hidden_dim': model.hidden_dim,
+                                'num_gnn_layers': model.num_layers,
+                                'asymmetric_mode': model.asymmetric_mode
                             }
                         }
-                        with open(tmp_best.name, 'wb') as f:
-                            pickle.dump(best_checkpoint, f)
-                        best_path = tmp_best.name
+                        with open(tmp_current.name, 'wb') as f:
+                            pickle.dump(current_checkpoint, f)
+                        current_path = tmp_current.name
                     
-                    # Evaluate vs best
-                    best_results = evaluate_models_subprocess_parallel(
+                    # Save initial model to temp checkpoint
+                    with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as tmp_initial:
+                        initial_checkpoint = {
+                            'params': initial_model.params,
+                            'model_config': {
+                                'num_vertices': initial_model.num_vertices,
+                                'hidden_dim': initial_model.hidden_dim,
+                                'num_gnn_layers': initial_model.num_layers,
+                                'asymmetric_mode': initial_model.asymmetric_mode
+                            }
+                        }
+                        with open(tmp_initial.name, 'wb') as f:
+                            pickle.dump(initial_checkpoint, f)
+                        initial_path = tmp_initial.name
+                    
+                    # Evaluate vs initial
+                    initial_results = evaluate_models_subprocess_parallel(
                         model1_path=current_path,
-                        model2_path=best_path,
+                        model2_path=initial_path,
                         num_games=eval_config['num_games'],
                         num_cpus=args.eval_num_cpus,
                         config=eval_config
                     )
                     
-                    eval_results['win_rate_vs_best'] = best_results['model1_win_rate']
-                    eval_results['draw_rate_vs_best'] = best_results.get('draw_rate', 0)
-                    eval_results['eval_time_vs_best'] = best_results['eval_time']
-                    eval_results['vs_best_details'] = best_results
+                    # Build results dict
+                    eval_results = {
+                        'win_rate_vs_initial': initial_results['model1_win_rate'],
+                        'draw_rate_vs_initial': initial_results.get('draw_rate', 0),
+                        'eval_time_vs_initial': initial_results['eval_time'],
+                        'vs_initial_details': initial_results
+                    }
                     
-                    # Clean up temp file
-                    os.unlink(best_path)
-                else:
-                    eval_results['win_rate_vs_best'] = -1
-                    eval_results['draw_rate_vs_best'] = -1
-                    eval_results['eval_time_vs_best'] = 0
-                    eval_results['vs_best_details'] = None
-                
-                # Clean up temp files
-                os.unlink(current_path)
-                os.unlink(initial_path)
-                
-            elif args.parallel_evaluation:
-                # First iteration: only evaluate vs initial
-                if iteration == 0:
-                    print("Using PARALLEL evaluation (first iteration - vs initial only)")
-                    eval_results_raw = evaluate_models_parallel(
+                    # Evaluate vs best if not first iteration
+                    if iteration > 0 and best_model is not None:
+                        # Save best model to temp checkpoint
+                        with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as tmp_best:
+                            best_checkpoint = {
+                                'params': best_model.params,
+                                'model_config': {
+                                    'num_vertices': best_model.num_vertices,
+                                    'hidden_dim': best_model.hidden_dim,
+                                    'num_gnn_layers': best_model.num_layers,
+                                    'asymmetric_mode': best_model.asymmetric_mode
+                                }
+                            }
+                            with open(tmp_best.name, 'wb') as f:
+                                pickle.dump(best_checkpoint, f)
+                            best_path = tmp_best.name
+                        
+                        # Evaluate vs best
+                        best_results = evaluate_models_subprocess_parallel(
+                            model1_path=current_path,
+                            model2_path=best_path,
+                            num_games=eval_config['num_games'],
+                            num_cpus=args.eval_num_cpus,
+                            config=eval_config
+                        )
+                        
+                        eval_results['win_rate_vs_best'] = best_results['model1_win_rate']
+                        eval_results['draw_rate_vs_best'] = best_results.get('draw_rate', 0)
+                        eval_results['eval_time_vs_best'] = best_results['eval_time']
+                        eval_results['vs_best_details'] = best_results
+                        
+                        # Clean up temp file
+                        os.unlink(best_path)
+                    else:
+                        eval_results['win_rate_vs_best'] = -1
+                        eval_results['draw_rate_vs_best'] = -1
+                        eval_results['eval_time_vs_best'] = 0
+                        eval_results['vs_best_details'] = None
+                    
+                    # Clean up temp files
+                    os.unlink(current_path)
+                    os.unlink(initial_path)
+                    
+                elif args.parallel_evaluation:
+                    # First iteration: only evaluate vs initial
+                    if iteration == 0:
+                        print("Using PARALLEL evaluation (first iteration - vs initial only)")
+                        eval_results_raw = evaluate_models_parallel(
                         model1=model,
                         model2=initial_model,
                         num_games=eval_config['num_games'],
@@ -912,41 +922,41 @@ def main():
                         mcts_sims=eval_config['mcts_sims'],
                         c_puct=eval_config['c_puct'],
                         temperature=0.0,
-                        game_mode=eval_config['game_mode'],
-                        python_eval=eval_config.get('python_eval', False)
-                    )
-                    eval_results = {
-                        'win_rate_vs_initial': eval_results_raw['model1_win_rate'],
-                        'draw_rate_vs_initial': eval_results_raw['draw_rate'],
-                        'eval_time_vs_initial': eval_results_raw['eval_time'],
-                        'vs_initial_details': eval_results_raw,
-                        'win_rate_vs_best': -1,  # No best model yet
-                        'draw_rate_vs_best': -1,
-                        'eval_time_vs_best': 0,
-                        'vs_best_details': None
-                    }
+                            game_mode=eval_config['game_mode'],
+                            python_eval=eval_config.get('python_eval', False)
+                        )
+                        eval_results = {
+                            'win_rate_vs_initial': eval_results_raw['model1_win_rate'],
+                            'draw_rate_vs_initial': eval_results_raw['draw_rate'],
+                            'eval_time_vs_initial': eval_results_raw['eval_time'],
+                            'vs_initial_details': eval_results_raw,
+                            'win_rate_vs_best': -1,  # No best model yet
+                            'draw_rate_vs_best': -1,
+                            'eval_time_vs_best': 0,
+                            'vs_best_details': None
+                        }
+                    else:
+                        # Use truly parallel evaluation for both opponents in one batch
+                        print("Using TRULY PARALLEL evaluation (vs initial AND best in one batch)")
+                        from evaluation_jax_truly_parallel import evaluate_vs_initial_and_best_truly_parallel
+                        eval_results = evaluate_vs_initial_and_best_truly_parallel(
+                            current_model=model,
+                            initial_model=initial_model,
+                            best_model=best_model,
+                            config=eval_config
+                        )
                 else:
-                    # Use truly parallel evaluation for both opponents in one batch
-                    print("Using TRULY PARALLEL evaluation (vs initial AND best in one batch)")
-                    from evaluation_jax_truly_parallel import evaluate_vs_initial_and_best_truly_parallel
-                    eval_results = evaluate_vs_initial_and_best_truly_parallel(
-                        current_model=model,
-                        initial_model=initial_model,
-                        best_model=best_model,
-                        config=eval_config
-                    )
-            else:
-                eval_results = evaluate_vs_initial_and_best(
+                    eval_results = evaluate_vs_initial_and_best(
                     current_model=model,
                     initial_model=initial_model,
                     best_model=best_model if iteration > 0 else None,  # Skip best eval in first iteration
-                    config=eval_config
-                )
-            win_rate_vs_initial = eval_results['win_rate_vs_initial']
-            eval_time = eval_results['eval_time_vs_initial']
-            
-            # Extract win rate vs best
-            win_rate_vs_best = eval_results.get('win_rate_vs_best', -1)
+                        config=eval_config
+                    )
+                win_rate_vs_initial = eval_results['win_rate_vs_initial']
+                eval_time = eval_results['eval_time_vs_initial']
+                
+                # Extract win rate vs best
+                win_rate_vs_best = eval_results.get('win_rate_vs_best', -1)
         
         # Model selection: update best model if current beats it (skip if evaluation was skipped)
         if args.skip_evaluation:

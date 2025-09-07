@@ -1,9 +1,9 @@
 {
   "total_games": 0,
-  "draws_found": 150,
+  "draws_found": 190,
   "counterexamples_by_size": {
     "n9_k4": 122,
-    "n10_k4": 19,
+    "n10_k4": 59,
     "n11_k4": 9
   }
 }

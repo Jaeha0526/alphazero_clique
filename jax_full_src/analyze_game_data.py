@@ -22,14 +22,22 @@ def analyze_game_file(filepath):
     print(f"Graph: n={data['vertices']}, k={data['k']}")
     print(f"Total training examples: {data.get('total_training_examples', data.get('total_games', 'N/A'))}")
     print(f"Games played: {data.get('num_games_played', 'N/A')}")
-    print(f"Sample games saved: {len(data['sample_games'])}")
     
-    # Analyze sample games
-    game_lengths = [game['num_moves'] for game in data['sample_games']]
+    # Handle both old and new data format
+    games = data.get('saved_games', data.get('sample_games', []))
+    is_full_data = data.get('is_full_data', False)
+    
+    if is_full_data:
+        print(f"FULL DATA: All {len(games)} games saved")
+    else:
+        print(f"Sample games saved: {len(games)}")
+    
+    # Analyze games
+    game_lengths = [game['num_moves'] for game in games]
     print(f"\nGame lengths: min={min(game_lengths)}, max={max(game_lengths)}, avg={np.mean(game_lengths):.1f}")
     
     # Analyze move patterns
-    for game_idx, game in enumerate(data['sample_games'][:3]):  # Show first 3 games
+    for game_idx, game in enumerate(games[:3]):  # Show first 3 games
         print(f"\n--- Game {game_idx + 1} ---")
         print(f"  Total moves: {game['num_moves']}")
         

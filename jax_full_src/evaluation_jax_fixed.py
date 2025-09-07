@@ -26,7 +26,9 @@ def evaluate_models_jax(
     c_puct: float = 3.0,
     temperature: float = 0.0,  # 0 for deterministic play during evaluation
     verbose: bool = False,
-    decided_games_only: bool = False
+    decided_games_only: bool = False,
+    save_games: bool = False,
+    save_path: Optional[str] = None
 ) -> Dict[str, float]:
     """
     Evaluate current model against baseline model by playing games.
@@ -52,6 +54,10 @@ def evaluate_models_jax(
     current_wins = 0
     baseline_wins = 0
     draws = 0
+    
+    # Game data collection
+    all_games_data = []
+    all_games_info = []
     
     # Initialize Ramsey saver if in avoid_clique mode
     ramsey_saver = None
@@ -113,6 +119,9 @@ def evaluate_models_jax(
         move_count = 0
         max_moves = num_vertices * (num_vertices - 1) // 2
         
+        # Collect game data for this game
+        game_moves = []
+        
         # Play game
         while board.game_states[0] == 0 and move_count < max_moves:
             current_player = int(board.current_players[0])
@@ -151,6 +160,19 @@ def evaluate_models_jax(
             else:
                 # No valid moves (shouldn't happen)
                 break
+            
+            # Collect move data if saving games
+            if save_games:
+                edge_indices, edge_features = board.get_features_for_nn_undirected()
+                move_data = {
+                    'player': current_player,
+                    'action': int(action),
+                    'policy': np.array(action_probs[0]),  # Convert to numpy for saving
+                    'model_used': 'current' if use_current else 'baseline',
+                    'edge_features': np.array(edge_features[0]),  # Board state
+                    'move_number': move_count
+                }
+                game_moves.append(move_data)
             
             # Make move
             board.make_moves(jnp.array([action]))
@@ -194,6 +216,55 @@ def evaluate_models_jax(
                 baseline_wins += 1
                 if verbose:
                     print(f"  Game {game_idx+1}: Baseline model wins")
+        
+        # Save game data if requested
+        if save_games:
+            # Determine actual winner (current or baseline model)
+            if game_state == 3 or game_state == 0:
+                actual_winner = 'draw'
+            elif (game_state == 1 and current_starts) or (game_state == 2 and not current_starts):
+                actual_winner = 'current'
+            else:
+                actual_winner = 'baseline'
+            
+            game_info = {
+                'game_id': game_idx,
+                'current_starts': current_starts,
+                'winner': actual_winner,
+                'num_moves': move_count,
+                'final_state': game_state,
+                'start_idx': len(all_games_data),
+                'end_idx': len(all_games_data) + len(game_moves)
+            }
+            all_games_info.append(game_info)
+            all_games_data.extend(game_moves)
+    
+    # Save evaluation games to file if requested
+    if save_games and save_path:
+        import pickle
+        from pathlib import Path
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(save_path, 'wb') as f:
+            pickle.dump({
+                'num_games': num_games,
+                'games_data': all_games_data,
+                'games_info': all_games_info,
+                'game_mode': game_mode,
+                'vertices': num_vertices,
+                'k': k,
+                'mcts_sims': mcts_sims,
+                'current_wins': current_wins,
+                'baseline_wins': baseline_wins,
+                'draws': draws,
+                'models': {
+                    'current': 'evaluation_current',
+                    'baseline': 'evaluation_baseline'
+                }
+            }, f)
+        if verbose:
+            print(f"Saved evaluation games to {save_path}")
     
     # Calculate statistics
     if decided_games_only and (current_wins + baseline_wins) > 0:
@@ -216,7 +287,10 @@ def evaluate_vs_initial_and_best(
     current_model: ImprovedBatchedNeuralNetwork,
     initial_model: ImprovedBatchedNeuralNetwork,
     best_model: Optional[ImprovedBatchedNeuralNetwork] = None,
-    config: dict = None
+    config: dict = None,
+    save_games: bool = False,
+    save_dir: Optional[str] = None,
+    iteration: int = 0
 ) -> Dict[str, float]:
     """
     Evaluate current model against both initial and best models.
@@ -237,6 +311,13 @@ def evaluate_vs_initial_and_best(
     print("\nEvaluating against initial model...")
     start_time = time.time()
     
+    # Determine save path for initial eval
+    initial_save_path = None
+    if save_games and save_dir:
+        from pathlib import Path
+        eval_dir = Path(save_dir) / "eval_games"
+        initial_save_path = eval_dir / f"iteration_{iteration}_vs_initial.pkl"
+    
     # Evaluate vs initial
     initial_results = evaluate_models_jax(
         current_model=current_model,
@@ -248,7 +329,9 @@ def evaluate_vs_initial_and_best(
         mcts_sims=config['mcts_sims'],
         c_puct=config.get('c_puct', 3.0),
         temperature=0.0,  # Deterministic for evaluation
-        verbose=False
+        verbose=False,
+        save_games=save_games,
+        save_path=initial_save_path
     )
     
     eval_time = time.time() - start_time
@@ -267,6 +350,13 @@ def evaluate_vs_initial_and_best(
         print("\nEvaluating against best model...")
         start_time = time.time()
         
+        # Determine save path for best eval
+        best_save_path = None
+        if save_games and save_dir:
+            from pathlib import Path
+            eval_dir = Path(save_dir) / "eval_games"
+            best_save_path = eval_dir / f"iteration_{iteration}_vs_best.pkl"
+        
         best_results = evaluate_models_jax(
             current_model=current_model,
             baseline_model=best_model,
@@ -277,7 +367,9 @@ def evaluate_vs_initial_and_best(
             mcts_sims=config['mcts_sims'],
             c_puct=config.get('c_puct', 3.0),
             temperature=0.0,
-            verbose=False
+            verbose=False,
+            save_games=save_games,
+            save_path=best_save_path
         )
         
         eval_time = time.time() - start_time
