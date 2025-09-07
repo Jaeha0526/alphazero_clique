@@ -322,7 +322,8 @@ class MCTXFinalOptimized:
         elapsed = time.time() - start_time
         print(f"Final optimized MCTS complete in {elapsed:.3f}s ({elapsed/self.batch_size*1000:.1f}ms per game)")
         
-        return action_probs
+        # Return both action probabilities and raw visit counts
+        return action_probs, root_visits
 
 
 # Test
@@ -340,9 +341,10 @@ if __name__ == "__main__":
     mcts = MCTXFinalOptimized(batch_size, max_nodes=num_sims + 1)
     
     # Warm up
-    _ = mcts.search(boards, nn, 2, 1.0)
+    _, _ = mcts.search(boards, nn, 2, 1.0)
     
     # Test
-    probs = mcts.search(boards, nn, 20, 1.0)
+    probs, visits = mcts.search(boards, nn, 20, 1.0)
     print(f"Action probs shape: {probs.shape}")
+    print(f"Visit counts shape: {visits.shape}")
     print(f"Sum: {jnp.sum(probs, axis=1)}")

@@ -508,7 +508,8 @@ class MCTXTrueJAX:
         elapsed = time.time() - start_time
         print(f"True MCTX search complete in {elapsed:.3f}s ({elapsed/self.batch_size*1000:.1f}ms per game)")
         
-        return action_probs
+        # Return both action probabilities and raw visit counts
+        return action_probs, root_visits
 
 
 # Test implementation

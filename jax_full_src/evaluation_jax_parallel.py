@@ -188,9 +188,9 @@ def evaluate_models_parallel(
         # If model1_starts[i] is False: model2 is player 0, model1 is player 1
         use_model1 = (boards.current_players == 0) == model1_starts
         
-        # Get action probabilities from both models
-        probs1 = mcts1.search(boards, model1, mcts_sims, temperature)
-        probs2 = mcts2.search(boards, model2, mcts_sims, temperature)
+        # Get action probabilities from both models (now returns tuple)
+        probs1, _ = mcts1.search(boards, model1, mcts_sims, temperature)
+        probs2, _ = mcts2.search(boards, model2, mcts_sims, temperature)
         
         # Select actions based on which model should play
         actions = []

@@ -120,7 +120,7 @@ def evaluate_models_asymmetric_detailed(
             
             if use_current:
                 # Current model's turn
-                action_probs = mcts_current.search(
+                action_probs, _ = mcts_current.search(
                     board, 
                     current_model,
                     mcts_sims,
@@ -128,7 +128,7 @@ def evaluate_models_asymmetric_detailed(
                 )
             else:
                 # Baseline model's turn
-                action_probs = mcts_baseline.search(
+                action_probs, _ = mcts_baseline.search(
                     board,
                     baseline_model,
                     mcts_sims,

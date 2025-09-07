@@ -613,10 +613,31 @@
             
             html += '</div>';
             
-            // Show top actions
+            // Show visit counts if available
+            if (move.top_visits && move.top_visits.length > 0) {
+                html += '<div class="move-detail">';
+                html += '<h4>MCTS Visit Counts</h4>';
+                
+                const totalVisits = move.top_visits.reduce((sum, v) => sum + v.visits, 0);
+                move.top_visits.slice(0, 5).forEach(action => {
+                    const visits = action.visits;
+                    const edge = action.edge;
+                    const isSelected = action.action === move.action;
+                    const percentage = (visits / totalVisits * 100).toFixed(1);
+                    
+                    html += '<div class="probability-bar">';
+                    html += `<div class="probability-fill" style="width: ${percentage}%; ${isSelected ? 'background: #44ff44;' : 'background: #4488ff;'}"></div>`;
+                    html += `<div class="probability-text">(${edge[0]},${edge[1]}): ${visits} visits (${percentage}%)</div>`;
+                    html += '</div>';
+                });
+                
+                html += '</div>';
+            }
+            
+            // Show top actions (final probabilities after temperature)
             if (move.top_actions && move.top_actions.length > 0) {
                 html += '<div class="move-detail">';
-                html += '<h4>Top Move Probabilities</h4>';
+                html += '<h4>Final Action Probabilities</h4>';
                 
                 move.top_actions.slice(0, 5).forEach(action => {
                     const prob = action.prob;

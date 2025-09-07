@@ -126,7 +126,7 @@ class OptimizedSelfPlay:
                 mcts_start = time.time()
                 print(f"    Starting MCTS search...")
                 try:
-                    mcts_probs = mcts.search(
+                    mcts_probs, visit_counts = mcts.search(
                         boards,
                         neural_network,
                         self.config.mcts_simulations,
@@ -150,6 +150,7 @@ class OptimizedSelfPlay:
                             'edge_indices': edge_indices[i],
                             'edge_features': edge_features[i],
                             'policy': mcts_probs[i],
+                            'visit_counts': visit_counts[i].tolist(),  # Save raw visit counts
                             'player': boards.current_players[i],
                             'player_role': int(boards.current_players[i]) if self.config.game_mode == "asymmetric" else None,
                             'action': None  # Will be filled after action selection
@@ -498,6 +499,10 @@ def main():
                         help='Number of CPUs for subprocess evaluation')
     parser.add_argument('--save_full_game_data', action='store_true',
                         help='Save complete game data every iteration (default: every 5 iterations)')
+    parser.add_argument('--hidden_dim', type=int, default=64,
+                        help='Hidden dimension for neural network (default: 64)')
+    parser.add_argument('--num_layers', type=int, default=3,
+                        help='Number of GNN layers (default: 3)')
     
     args = parser.parse_args()
     
@@ -539,16 +544,16 @@ def main():
     print("Creating neural network (this may take 1-2 minutes for JAX compilation)...")
     model = ImprovedBatchedNeuralNetwork(
         num_vertices=config.num_vertices,  # Use config values
-        hidden_dim=64,
-        num_layers=3,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
         asymmetric_mode=args.asymmetric
     )
     
     # Keep a copy of the initial model for evaluation
     initial_model = ImprovedBatchedNeuralNetwork(
         num_vertices=config.num_vertices,
-        hidden_dim=64,
-        num_layers=3,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
         asymmetric_mode=args.asymmetric
     )
     # Copy initial parameters (will be overwritten if resuming)
@@ -557,8 +562,8 @@ def main():
     # Initialize best model tracking
     best_model = ImprovedBatchedNeuralNetwork(
         num_vertices=config.num_vertices,
-        hidden_dim=64,
-        num_layers=3,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
         asymmetric_mode=args.asymmetric
     )
     best_model.params = model.params  # Start with initial model as best

@@ -133,7 +133,7 @@ def evaluate_models_jax(
             
             if use_current:
                 # Current model's turn
-                action_probs = mcts_current.search(
+                action_probs, visit_counts = mcts_current.search(
                     board, 
                     current_model,
                     mcts_sims,
@@ -141,7 +141,7 @@ def evaluate_models_jax(
                 )
             else:
                 # Baseline model's turn
-                action_probs = mcts_baseline.search(
+                action_probs, visit_counts = mcts_baseline.search(
                     board,
                     baseline_model,
                     mcts_sims,
@@ -168,6 +168,7 @@ def evaluate_models_jax(
                     'player': current_player,
                     'action': int(action),
                     'policy': np.array(action_probs[0]),  # Convert to numpy for saving
+                    'visit_counts': np.array(visit_counts[0]),  # Raw MCTS visit counts
                     'model_used': 'current' if use_current else 'baseline',
                     'edge_features': np.array(edge_features[0]),  # Board state
                     'move_number': move_count

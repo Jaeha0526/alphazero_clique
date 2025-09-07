@@ -184,6 +184,21 @@ def load_single_game(filepath, game_idx):
                         'edge': [v1, v2]
                     })
         
+        # Add visit counts if available
+        visit_counts = move.get('visit_counts', [])
+        if len(visit_counts) > 0:
+            top_visits = sorted(enumerate(visit_counts), key=lambda x: x[1], reverse=True)[:10]
+            processed_move['top_visits'] = []
+            for act, visits in top_visits:
+                if visits > 0:  # Only show actions that were visited
+                    v1, v2 = edge_to_vertices(act, n)
+                    if v1 is not None:
+                        processed_move['top_visits'].append({
+                            'action': int(act),
+                            'visits': int(visits),
+                            'edge': [v1, v2]
+                        })
+        
         if is_eval:
             processed_move['model_used'] = move.get('model_used', 'unknown')
         
