@@ -381,6 +381,8 @@ All evaluation modes respect:
 - **Separate Evaluation Settings**: `--eval_games` and `--eval_mcts_sims` for evaluation control
 - **Resume Training**: `--resume_from checkpoint.pkl` to continue from saved state (properly loads initial/best models)
 - **Game Modes**: symmetric, asymmetric, avoid_clique (for Ramsey counterexamples)
+- **Neural Network Architecture**: `--hidden_dim` (default: 64) and `--num_layers` (default: 3) for GNN configuration
+- **Game Data Saving**: `--save_full_game_data` to save complete game data every iteration (not just every 5)
 
 ### ⚠️ Important Performance Considerations
 
@@ -679,3 +681,81 @@ The `pipeline_clique.py` script accepts various command-line arguments to config
 - **Skill Variation:** Useful for draw-heavy scenarios (e.g., n=7, k=4) where random MCTS simulation count differences between players create skill imbalances, leading to more decisive games and better value learning signal.
 - **Model Evaluation:** Best model updates use win rate calculated from decided games only (excluding draws), while initial model comparisons include draws as losses to show overall performance.
 - **Policy-Only Mode:** When `--use-policy-only` is enabled, moves are selected directly from the neural network's policy head without MCTS search, useful for faster evaluation and testing raw policy quality.
+
+## Game Data Analysis and Visualization
+
+### Game Data Saving
+
+The training pipeline saves game data periodically for analysis and debugging:
+
+- **Default**: Saves game data every 5 iterations (`iteration_0.pkl`, `iteration_5.pkl`, etc.)
+- **Full Save Mode**: Use `--save_full_game_data` flag to save data every iteration
+- **Location**: `experiments/<experiment_name>/game_data/`
+
+Each saved file includes:
+- Complete move sequences with board states
+- **MCTS visit counts** (NEW): Raw visit distribution before temperature transformation
+- **Final action probabilities**: After temperature-based selection
+- Neural network value predictions
+- Game metadata (winner, move count, etc.)
+
+### MCTS Visit Counts (NEW Feature)
+
+As of September 2025, the system now saves MCTS visit counts alongside action probabilities:
+
+```python
+# Each move in saved game data now includes:
+{
+    'policy': [...],        # Final action probabilities (after temperature)
+    'visit_counts': [...],  # Raw MCTS visit counts for each action
+    'value': 0.65,         # Neural network's position evaluation
+    'action': 7,           # Action actually taken
+    ...
+}
+```
+
+This enables analysis of:
+- **Exploration vs Exploitation**: How MCTS distributes search effort
+- **Temperature Effect**: Comparing raw visits (exploration) vs final probabilities (selection)
+- **Search Depth Impact**: How deeper search changes action preferences
+- **Network vs Search**: Differences between neural network priors and MCTS conclusions
+
+### Web-Based Game Visualizer
+
+Interactive visualization tool for analyzing saved games:
+
+```bash
+cd game_data_analyze
+python app.py
+# Open browser to http://localhost:5001
+```
+
+Features:
+- **Interactive Graph Display**: Visualize the clique game as a graph
+- **Move-by-Move Replay**: Step through games seeing each decision
+- **MCTS Visit Distribution**: View raw visit counts per action (green bars)
+- **Final Action Probabilities**: See temperature-modified selection (yellow bars)
+- **Game Statistics**: Win rates, game lengths, patterns across iterations
+- **Comparison Tools**: Load multiple iterations to track learning progress
+
+The visualizer clearly shows the temperature transition:
+- **Moves 1-10**: Smooth probability distributions (temperature = 1.0)
+- **Moves 11+**: One-hot selections (temperature = 0.0)
+
+### Analyzing Learning Progress
+
+Use the provided analysis scripts to track model improvement:
+
+```bash
+# Analyze single iteration
+python jax_full_src/analyze_game_data.py experiments/my_exp/game_data/iteration_10.pkl
+
+# Compare across iterations
+python jax_full_src/analyze_game_data.py experiments/my_exp/game_data/ --compare
+```
+
+This shows:
+- Average game length trends
+- Win rate evolution
+- Move quality improvements
+- Strategy pattern changes

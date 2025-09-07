@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is an AlphaZero implementation for the Clique Game - a graph-based combinatorial game where players strategically add edges to form k-cliques. The project implements deep reinforcement learning using Graph Neural Networks (GNNs) and Monte Carlo Tree Search (MCTS).
 
+### Recent Updates (September 2025)
+- **MCTS Visit Counts**: Now saves raw visit counts alongside action probabilities for deeper analysis
+- **Neural Network Configuration**: Added `--hidden_dim` and `--num_layers` command-line arguments
+- **Enhanced Game Visualizer**: Web app displays both visit counts and final probabilities
+- **Fixed Evaluation**: Subprocess and parallel evaluation now handle MCTS tuple returns correctly
+- **Full Game Data Saving**: `--save_full_game_data` flag saves data every iteration
+
 ### Key Documents to Read First
 - `README.md` - Complete documentation of features, installation, and usage
 - `project_history.md` - Detailed development history with lessons learned about JAX vs PyTorch performance
@@ -49,7 +56,9 @@ python run_jax_optimized.py \
     --num_epochs 20 \
     --eval_games 42 --eval_mcts_sims 30 \
     --use_true_mctx \  # 5x faster MCTS with JAX primitives
-    --parallel_evaluation  # All eval games in single batch
+    --parallel_evaluation \  # All eval games in single batch
+    --hidden_dim 64 --num_layers 3 \  # Neural network architecture
+    --save_full_game_data  # Save game data every iteration
 
 # Resume from checkpoint
 python run_jax_optimized.py \
@@ -70,11 +79,16 @@ python src/visualize_clique.py
 # Analyze training results
 python src/analyze_games.py
 
-# Analyze JAX training game data (saved every 5 iterations)
+# Analyze JAX training game data (saved every 5 iterations, or every iteration with --save_full_game_data)
 python jax_full_src/analyze_game_data.py experiments/your_experiment/game_data/iteration_10.pkl
 
 # Compare learning progress across iterations
 python jax_full_src/analyze_game_data.py experiments/your_experiment/game_data/ --compare
+
+# Interactive web visualizer for game data (includes MCTS visit counts)
+cd game_data_analyze
+python app.py
+# Open browser to http://localhost:5001
 ```
 
 ## High-Level Architecture
@@ -152,10 +166,12 @@ python jax_full_src/analyze_game_data.py experiments/your_experiment/game_data/ 
 - Results stored in `/experiments/<experiment_name>/`
 - Models saved as `clique_net.pth.tar` (best) and `clique_net_iter{N}.pth.tar`
 - Training logs in `training_log.json`
-- **Game data saved every 5 iterations** in `game_data/` subdirectory
+- **Game data saved every 5 iterations** in `game_data/` subdirectory (or every iteration with `--save_full_game_data`)
   - Files: `iteration_0.pkl`, `iteration_5.pkl`, etc.
   - Contains sample games with move-by-move data for analysis
+  - **NEW**: Includes MCTS visit counts alongside action probabilities
   - Use `analyze_game_data.py` to track learning progress
+  - Use `game_data_analyze/app.py` for interactive web visualization
 - Optional Weights & Biases integration for tracking
 
 ## Important Implementation Notes
