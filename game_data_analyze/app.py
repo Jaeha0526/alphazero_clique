@@ -14,7 +14,9 @@ import numpy as np
 app = Flask(__name__)
 
 # Global storage for loaded game data
-game_data_cache = {}
+file_metadata_cache = {}  # Fast metadata only
+game_data_cache = {}      # Full game data (lazy loaded)
+layout_cache = {}         # Graph layouts (computed once)
 current_file = None
 
 
@@ -29,124 +31,166 @@ def edge_to_vertices(edge_idx, n):
     return None, None
 
 
-def load_game_data(filepath):
-    """Load game data from pickle file (new format)."""
-    global current_file
-    
-    if filepath in game_data_cache:
-        return game_data_cache[filepath]
+def load_file_metadata(filepath):
+    """Load only metadata from pickle file for fast file selection."""
+    if filepath in file_metadata_cache:
+        return file_metadata_cache[filepath]
     
     with open(filepath, 'rb') as f:
         data = pickle.load(f)
     
     # Check if this is evaluation data or training data
-    is_eval = 'games_data' in data  # Evaluation files have games_data instead of training_data
-    
-    processed_data = {
-        'iteration': data.get('iteration', 'unknown'),
-        'n': data['vertices'],
-        'k': data['k'],
-        'game_mode': data.get('game_mode', 'symmetric'),
-        'is_eval': is_eval
-    }
+    is_eval = 'games_data' in data
     
     if is_eval:
-        # Evaluation game format
-        processed_data['num_games'] = data['num_games']
-        processed_data['current_wins'] = data.get('current_wins', 0)
-        processed_data['baseline_wins'] = data.get('baseline_wins', 0)
-        processed_data['draws'] = data.get('draws', 0)
         games_info = data['games_info']
-        all_moves = data['games_data']
-    else:
-        # Training game format
-        games_info = data.get('games_info', [])
-        all_moves = data.get('training_data', [])
-        processed_data['num_games'] = len(games_info)
-    
-    # Process games for JSON serialization
-    processed_data['games'] = []
-    
-    for game_info in games_info:
-        # Extract moves for this game
-        start_idx = game_info.get('start_idx', 0)
-        end_idx = game_info.get('end_idx', start_idx)
-        game_moves = all_moves[start_idx:end_idx]
-        
-        processed_game = {
-            'game_id': game_info.get('game_id', 0),
-            'winner': game_info.get('winner'),
-            'num_moves': game_info.get('num_moves', len(game_moves)),
-            'moves': []
+        metadata = {
+            'iteration': data.get('iteration', 'unknown'),
+            'n': data['vertices'],
+            'k': data['k'],
+            'game_mode': data.get('game_mode', 'symmetric'),
+            'is_eval': True,
+            'num_games': data['num_games'],
+            'current_wins': data.get('current_wins', 0),
+            'baseline_wins': data.get('baseline_wins', 0),
+            'draws': data.get('draws', 0)
         }
-        
-        # Add evaluation-specific info
+    else:
+        games_info = data.get('games_info', [])
+        metadata = {
+            'iteration': data.get('iteration', 'unknown'),
+            'n': data['vertices'],
+            'k': data['k'],
+            'game_mode': data.get('game_mode', 'symmetric'),
+            'is_eval': False,
+            'num_games': len(games_info)
+        }
+    
+    # Add basic game info (just winners and lengths, no move data)
+    metadata['game_summaries'] = []
+    for i, game_info in enumerate(games_info):
+        summary = {
+            'game_id': game_info.get('game_id', i),
+            'winner': game_info.get('winner'),
+            'num_moves': game_info.get('num_moves', 0)
+        }
         if is_eval:
-            processed_game['current_starts'] = game_info.get('current_starts', True)
-        
-        for move_idx, move in enumerate(game_moves):
-            processed_move = {
-                'player': int(move['player']),
-                'value': float(move.get('value', 0)),
-                'move_number': move_idx
-            }
-            
-            # Add action if available
-            action = move.get('action')
-            if action is not None:
-                processed_move['action'] = int(action)
-                # Convert to vertex pair
-                v1, v2 = edge_to_vertices(action, processed_data['n'])
-                if v1 is not None:
-                    processed_move['edge'] = [v1, v2]
-            
-            # Add policy/probabilities
-            policy = move.get('policy', [])
-            if len(policy) > 0:
-                # Get top 10 actions by probability
-                top_actions = sorted(enumerate(policy), key=lambda x: x[1], reverse=True)[:10]
-                processed_move['top_actions'] = []
-                for act, prob in top_actions:
-                    v1, v2 = edge_to_vertices(act, processed_data['n'])
-                    if v1 is not None:
-                        processed_move['top_actions'].append({
-                            'action': int(act),
-                            'prob': float(prob),
-                            'edge': [v1, v2]
-                        })
-            
-            # Add model info for evaluation games
-            if is_eval:
-                processed_move['model_used'] = move.get('model_used', 'unknown')
-            
-            processed_game['moves'].append(processed_move)
-        
-        processed_data['games'].append(processed_game)
+            summary['current_starts'] = game_info.get('current_starts', True)
+        metadata['game_summaries'].append(summary)
     
-    # Generate graph layout
-    n = processed_data['n']
-    G = nx.complete_graph(n)
-    pos = nx.spring_layout(G, seed=42, k=2/np.sqrt(n))
+    file_metadata_cache[filepath] = metadata
+    return metadata
+
+
+def get_graph_layout(n):
+    """Get or create graph layout for n vertices."""
+    if n in layout_cache:
+        return layout_cache[n]
     
-    # Convert positions to list format
-    processed_data['node_positions'] = {str(i): [float(pos[i][0]), float(pos[i][1])] for i in range(n)}
+    # Use simpler circular layout for speed, fall back to spring for small graphs
+    if n <= 8:
+        G = nx.complete_graph(n)
+        pos = nx.spring_layout(G, seed=42, k=2/np.sqrt(n), iterations=50)
+    else:
+        # Circular layout is much faster for larger graphs
+        pos = nx.circular_layout(nx.complete_graph(n))
     
-    # Generate edge list with indices
-    processed_data['edges'] = []
+    # Convert to the format we need
+    node_positions = {str(i): [float(pos[i][0]), float(pos[i][1])] for i in range(n)}
+    
+    # Generate edge list
+    edges = []
     idx = 0
     for i in range(n):
         for j in range(i + 1, n):
-            processed_data['edges'].append({
-                'id': idx,
-                'source': i,
-                'target': j
-            })
+            edges.append({'id': idx, 'source': i, 'target': j})
             idx += 1
     
-    game_data_cache[filepath] = processed_data
-    current_file = filepath
+    layout_data = {
+        'node_positions': node_positions,
+        'edges': edges
+    }
     
-    return processed_data
+    layout_cache[n] = layout_data
+    return layout_data
+
+
+def load_single_game(filepath, game_idx):
+    """Load and process a single game's data on demand."""
+    cache_key = f"{filepath}:game_{game_idx}"
+    if cache_key in game_data_cache:
+        return game_data_cache[cache_key]
+    
+    # Load raw data
+    with open(filepath, 'rb') as f:
+        data = pickle.load(f)
+    
+    is_eval = 'games_data' in data
+    n = data['vertices']
+    
+    if is_eval:
+        games_info = data['games_info']
+        all_moves = data['games_data']
+    else:
+        games_info = data.get('games_info', [])
+        all_moves = data.get('training_data', [])
+    
+    if game_idx >= len(games_info):
+        return None
+    
+    # Process only the requested game
+    game_info = games_info[game_idx]
+    start_idx = game_info.get('start_idx', 0)
+    end_idx = game_info.get('end_idx', start_idx)
+    game_moves = all_moves[start_idx:end_idx]
+    
+    processed_game = {
+        'game_id': game_info.get('game_id', game_idx),
+        'winner': game_info.get('winner'),
+        'num_moves': game_info.get('num_moves', len(game_moves)),
+        'moves': []
+    }
+    
+    if is_eval:
+        processed_game['current_starts'] = game_info.get('current_starts', True)
+    
+    # Process moves
+    for move_idx, move in enumerate(game_moves):
+        processed_move = {
+            'player': int(move['player']),
+            'value': float(move.get('value', 0)),
+            'move_number': move_idx
+        }
+        
+        # Add action if available
+        action = move.get('action')
+        if action is not None:
+            processed_move['action'] = int(action)
+            v1, v2 = edge_to_vertices(action, n)
+            if v1 is not None:
+                processed_move['edge'] = [v1, v2]
+        
+        # Add policy/probabilities
+        policy = move.get('policy', [])
+        if len(policy) > 0:
+            top_actions = sorted(enumerate(policy), key=lambda x: x[1], reverse=True)[:10]
+            processed_move['top_actions'] = []
+            for act, prob in top_actions:
+                v1, v2 = edge_to_vertices(act, n)
+                if v1 is not None:
+                    processed_move['top_actions'].append({
+                        'action': int(act),
+                        'prob': float(prob),
+                        'edge': [v1, v2]
+                    })
+        
+        if is_eval:
+            processed_move['model_used'] = move.get('model_used', 'unknown')
+        
+        processed_game['moves'].append(processed_move)
+    
+    game_data_cache[cache_key] = processed_game
+    return processed_game
 
 
 @app.route('/')
@@ -192,9 +236,10 @@ def list_files():
     return jsonify(files)
 
 
-@app.route('/api/load_game')
-def load_game():
-    """Load a specific game file."""
+@app.route('/api/load_file')
+def load_file():
+    """Load file metadata only (fast)."""
+    global current_file
     filepath = request.args.get('file')
     if not filepath:
         return jsonify({'error': 'No file specified'}), 400
@@ -203,8 +248,40 @@ def load_game():
         return jsonify({'error': 'File not found'}), 404
     
     try:
-        data = load_game_data(filepath)
-        return jsonify(data)
+        metadata = load_file_metadata(filepath)
+        layout = get_graph_layout(metadata['n'])
+        
+        current_file = filepath
+        
+        response = {
+            'metadata': metadata,
+            'layout': layout
+        }
+        return jsonify(response)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/load_game')
+def load_specific_game():
+    """Load a specific game's data on demand."""
+    filepath = request.args.get('file')
+    game_idx = request.args.get('game_idx', type=int)
+    
+    if not filepath:
+        return jsonify({'error': 'No file specified'}), 400
+    if game_idx is None:
+        return jsonify({'error': 'No game index specified'}), 400
+    
+    if not Path(filepath).exists():
+        return jsonify({'error': 'File not found'}), 404
+    
+    try:
+        game_data = load_single_game(filepath, game_idx)
+        if game_data is None:
+            return jsonify({'error': 'Invalid game index'}), 400
+        
+        return jsonify(game_data)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -212,26 +289,31 @@ def load_game():
 @app.route('/api/game_state')
 def get_game_state():
     """Get the current game state for a specific game and move."""
+    filepath = request.args.get('file')
     game_idx = int(request.args.get('game', 0))
     move_idx = int(request.args.get('move', 0))
     
-    if not current_file or current_file not in game_data_cache:
-        return jsonify({'error': 'No game loaded'}), 400
+    if not filepath:
+        return jsonify({'error': 'No file specified'}), 400
     
-    data = game_data_cache[current_file]
-    
-    if game_idx >= len(data['games']):
-        return jsonify({'error': 'Invalid game index'}), 400
-    
-    game = data['games'][game_idx]
+    # Load game data if not cached
+    cache_key = f"{filepath}:game_{game_idx}"
+    if cache_key not in game_data_cache:
+        game = load_single_game(filepath, game_idx)
+        if game is None:
+            return jsonify({'error': 'Invalid game index'}), 400
+    else:
+        game = game_data_cache[cache_key]
     
     if move_idx >= len(game['moves']):
         return jsonify({'error': 'Invalid move index'}), 400
     
-    # Build edge states up to current move
-    n = data['n']
-    edge_states = {}
+    # Get file metadata for game settings
+    metadata = load_file_metadata(filepath)
+    n = metadata['n']
     
+    # Build edge states up to current move
+    edge_states = {}
     for m_idx in range(move_idx + 1):
         move = game['moves'][m_idx]
         action = move.get('action')
@@ -244,6 +326,7 @@ def get_game_state():
     
     # Determine if game ended at current move
     game_ended = False
+    game_result = None
     if move_idx == len(game['moves']) - 1:
         # Last move
         if game['num_moves'] == n * (n - 1) // 2:
@@ -253,9 +336,7 @@ def get_game_state():
         else:
             # Someone formed a k-clique
             game_ended = True
-            if data['game_mode'] == 'avoid_clique':
-                # In avoid_clique, forming clique means you lose
-                # So winner is opposite of who made the last move
+            if metadata['game_mode'] == 'avoid_clique':
                 if game['winner'] is not None:
                     game_result = f"Player {game['winner']} wins"
                 else:
@@ -279,7 +360,7 @@ def get_game_state():
         response['game_info']['result'] = game_result
     
     # Add evaluation-specific info
-    if data.get('is_eval', False):
+    if metadata.get('is_eval', False):
         response['game_info']['current_starts'] = game.get('current_starts', True)
         response['game_info']['is_eval'] = True
     
@@ -289,18 +370,20 @@ def get_game_state():
 @app.route('/api/stats')
 def get_stats():
     """Get statistics for the loaded file."""
-    if not current_file or current_file not in game_data_cache:
-        return jsonify({'error': 'No game loaded'}), 400
+    filepath = request.args.get('file')
+    if not filepath:
+        return jsonify({'error': 'No file specified'}), 400
     
-    data = game_data_cache[current_file]
+    metadata = load_file_metadata(filepath)
     
-    # Calculate statistics
-    game_lengths = [g['num_moves'] for g in data['games']]
-    max_possible = data['n'] * (data['n'] - 1) // 2
+    # Calculate statistics from game summaries
+    game_summaries = metadata['game_summaries']
+    game_lengths = [g['num_moves'] for g in game_summaries]
+    max_possible = metadata['n'] * (metadata['n'] - 1) // 2
     complete_games = sum(1 for l in game_lengths if l == max_possible)
     
     stats = {
-        'total_games': len(data['games']),
+        'total_games': len(game_summaries),
         'avg_length': np.mean(game_lengths) if game_lengths else 0,
         'min_length': min(game_lengths) if game_lengths else 0,
         'max_length': max(game_lengths) if game_lengths else 0,
@@ -309,15 +392,15 @@ def get_stats():
     }
     
     # Add win statistics
-    if data.get('is_eval'):
-        stats['current_wins'] = data.get('current_wins', 0)
-        stats['baseline_wins'] = data.get('baseline_wins', 0)
-        stats['draws'] = data.get('draws', 0)
+    if metadata.get('is_eval'):
+        stats['current_wins'] = metadata.get('current_wins', 0)
+        stats['baseline_wins'] = metadata.get('baseline_wins', 0)
+        stats['draws'] = metadata.get('draws', 0)
     else:
         # Count wins for training games
-        p0_wins = sum(1 for g in data['games'] if g.get('winner') == 0)
-        p1_wins = sum(1 for g in data['games'] if g.get('winner') == 1)
-        draws = len(data['games']) - p0_wins - p1_wins
+        p0_wins = sum(1 for g in game_summaries if g.get('winner') == 0)
+        p1_wins = sum(1 for g in game_summaries if g.get('winner') == 1)
+        draws = len(game_summaries) - p0_wins - p1_wins
         stats['p0_wins'] = p0_wins
         stats['p1_wins'] = p1_wins
         stats['draws'] = draws

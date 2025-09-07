@@ -332,6 +332,8 @@
             
             <div class="info-panel">
                 <h3>📊 Game Information</h3>
+                <div id="loadingIndicator" style="display: none; color: #666; font-style: italic;">Loading...</div>
+                <div id="gameStatus">No game loaded</div>
                 <div id="gameStats" class="stats"></div>
                 <div id="moveInfo" class="move-info"></div>
             </div>
@@ -341,6 +343,7 @@
     <script>
         // Global state
         let currentData = null;
+        let gameCache = {}; // Cache for loaded individual game data
         let currentGame = null;
         let currentGameIdx = 0;
         let currentMoveIdx = 0;
@@ -412,29 +415,41 @@
             });
             document.querySelector(`[data-path="${filepath}"]`).classList.add('selected');
             
+            // Show loading indicator
+            document.getElementById('loadingIndicator').style.display = 'block';
+            
             try {
-                const response = await fetch('/api/load_game?file=' + encodeURIComponent(filepath));
+                // Load only metadata first (fast)
+                const response = await fetch('/api/load_file?file=' + encodeURIComponent(filepath));
                 const data = await response.json();
                 
                 if (data.error) {
                     throw new Error(data.error);
                 }
                 
-                currentData = data;
+                // Store metadata and layout
+                currentData = {
+                    ...data.metadata,
+                    ...data.layout,
+                    currentFile: filepath
+                };
                 currentGameIdx = 0;
                 currentMoveIdx = 0;
                 
                 setupGameControls();
-                loadGame(0);
+                // Load first game data
+                await loadGame(0);
                 updateStats();
             } catch (error) {
                 alert('Failed to load game file: ' + error.message);
+            } finally {
+                document.getElementById('loadingIndicator').style.display = 'none';
             }
         }
         
         function setupGameControls() {
             const gameSelect = document.getElementById('gameSelect');
-            gameSelect.innerHTML = currentData.games.map((game, idx) => 
+            gameSelect.innerHTML = currentData.game_summaries.map((game, idx) => 
                 `<option value="${idx}">Game ${game.game_id + 1} (${game.num_moves} moves)</option>`
             ).join('');
             gameSelect.disabled = false;
@@ -447,9 +462,31 @@
             document.getElementById('resetBtn').disabled = false;
         }
         
-        function loadGame(gameIdx) {
+        async function loadGame(gameIdx) {
             currentGameIdx = gameIdx;
-            currentGame = currentData.games[gameIdx];
+            
+            // Check if game is already loaded in cache
+            const cacheKey = `${currentData.currentFile}:game_${gameIdx}`;
+            if (!gameCache[cacheKey]) {
+                // Show mini loading indicator for game load
+                document.getElementById('gameStatus').textContent = 'Loading game data...';
+                
+                try {
+                    const response = await fetch(`/api/load_game?file=${encodeURIComponent(currentData.currentFile)}&game_idx=${gameIdx}`);
+                    const gameData = await response.json();
+                    
+                    if (gameData.error) {
+                        throw new Error(gameData.error);
+                    }
+                    
+                    gameCache[cacheKey] = gameData;
+                } catch (error) {
+                    alert('Failed to load game data: ' + error.message);
+                    return;
+                }
+            }
+            
+            currentGame = gameCache[cacheKey];
             currentMoveIdx = 0;
             
             // Update move slider
@@ -457,6 +494,7 @@
             moveSlider.max = currentGame.moves.length - 1;
             moveSlider.value = 0;
             
+            document.getElementById('gameStatus').textContent = `Game ${currentGame.game_id + 1}`;
             updateMoveDisplay();
             drawGame();
         }
@@ -619,7 +657,7 @@
         
         async function updateStats() {
             try {
-                const response = await fetch('/api/stats');
+                const response = await fetch(`/api/stats?file=${encodeURIComponent(currentData.currentFile)}`);
                 const stats = await response.json();
                 
                 const statsDiv = document.getElementById('gameStats');
@@ -675,8 +713,8 @@
         
         function setupEventListeners() {
             // Game selection
-            document.getElementById('gameSelect').addEventListener('change', (e) => {
-                loadGame(parseInt(e.target.value));
+            document.getElementById('gameSelect').addEventListener('change', async (e) => {
+                await loadGame(parseInt(e.target.value));
             });
             
             // Move slider
