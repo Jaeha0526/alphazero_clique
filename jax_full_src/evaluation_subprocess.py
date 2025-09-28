@@ -143,17 +143,37 @@ def evaluate_models_subprocess_parallel(
                 worker_script = tmpdir / f'worker_{i}.py'
                 with open(worker_script, 'w') as f:
                     f.write(f"""
+# IMPORTANT: Set environment variables BEFORE importing anything
 import os
-# Completely disable CUDA for subprocess workers
-os.environ['JAX_PLATFORMS'] = 'cpu'  # Force CPU only
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable CUDA completely
-os.environ['JAX_ENABLE_X64'] = 'False'  # Use 32-bit for memory efficiency
-os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'  # Don't preallocate memory
-os.environ['JAX_DISABLE_JIT'] = 'False'  # Keep JIT for CPU performance
+import sys
+
+# Force CPU-only mode with all available flags
+os.environ['JAX_PLATFORMS'] = 'cpu'
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+os.environ['JAX_ENABLE_X64'] = 'False'
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+os.environ['JAX_DISABLE_JIT'] = 'False'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['XLA_FLAGS'] = '--xla_force_host_platform_device_count=1'
+
+# Suppress all warnings before importing JAX
+import warnings
+warnings.filterwarnings('ignore')
+
+# Disable JAX GPU plugin discovery completely
+os.environ['JAX_PLATFORMS'] = 'cpu'
 
 import pickle
-import sys
 sys.path.append('jax_full_src')
+
+# Try to import JAX and force CPU backend
+try:
+    import jax
+    # Force CPU backend explicitly
+    jax.config.update('jax_platform_name', 'cpu')
+except Exception as e:
+    print(f"Worker {i}: Warning during JAX import: {{e}}", file=sys.stderr)
+    pass
 
 from standalone_evaluation import load_model
 from evaluation_jax_parallel import evaluate_models_parallel
@@ -188,11 +208,18 @@ print(f"Worker {i}: Completed {{results['model1_wins']}}-{{results['model2_wins'
                 # Start subprocess with environment variables
                 print(f"  Starting worker {i}: {worker_games} games")
                 env = os.environ.copy()
+                # Force CPU-only execution
                 env['JAX_PLATFORMS'] = 'cpu'
-                env['CUDA_VISIBLE_DEVICES'] = '-1'
+                env['CUDA_VISIBLE_DEVICES'] = ''  # Empty string disables CUDA properly
                 env['OMP_NUM_THREADS'] = '1'  # Limit threads per process
+                env['XLA_FLAGS'] = '--xla_force_host_platform_device_count=1'  # Force single CPU device
+                # Disable all GPU-related libraries
+                env['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logs
+                env['JAX_ENABLE_X64'] = 'False'
+                env['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+                # Run with explicit python flags to reduce memory usage
                 proc = subprocess.Popen(
-                    ['python', str(worker_script)],
+                    ['python', '-u', str(worker_script)],  # -u for unbuffered output
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -202,29 +229,78 @@ print(f"Worker {i}: Completed {{results['model1_wins']}}-{{results['model2_wins'
         
         # Wait for all workers to complete
         print("\n  Waiting for workers...")
+        successful_workers = []
+        failed_workers = []
+
         for i, proc in processes:
             stdout, stderr = proc.communicate()
             if proc.returncode != 0:
-                print(f"  Worker {i} failed: {stderr}")
+                # Filter out known JAX CUDA warnings that are not fatal
+                stderr_lines = stderr.split('\n')
+                fatal_errors = [line for line in stderr_lines
+                               if line and 'CUDA_ERROR' not in line
+                               and 'cuda_versions' not in line
+                               and 'jax_plugins' not in line
+                               and 'Jax plugin configuration error' not in line
+                               and 'pthread_create' not in line
+                               and 'tf_XLAEigen' not in line
+                               and 'tf_xla-cpu-llvm' not in line]
+                if fatal_errors:
+                    print(f"  Worker {i} failed with errors")
+                    failed_workers.append(i)
+                else:
+                    # Likely just JAX initialization warnings, check if result file exists
+                    result_file = tmpdir / f'worker_{i}_results.pkl'
+                    if result_file.exists():
+                        print(f"  Worker {i}: Completed (with warnings)")
+                        successful_workers.append(i)
+                    else:
+                        print(f"  Worker {i}: Failed (no results)")
+                        failed_workers.append(i)
             else:
-                print(f"  {stdout.strip()}")
+                # Print only the completion line from stdout
+                for line in stdout.split('\n'):
+                    if 'Completed' in line:
+                        print(f"  {line.strip()}")
+                successful_workers.append(i)
+
+        if failed_workers:
+            print(f"\n  ⚠️  {len(failed_workers)} workers failed, using results from {len(successful_workers)} successful workers")
         
-        # Aggregate results
+        # Aggregate results from successful workers only
         total_model1_wins = 0
         total_model2_wins = 0
         total_draws = 0
         total_games_played = 0
-        
+
         for result_file in result_files:
             if result_file.exists():
-                with open(result_file, 'rb') as f:
-                    results = pickle.load(f)
-                    total_model1_wins += results['model1_wins']
-                    total_model2_wins += results['model2_wins']
-                    total_draws += results['draws']
-                    # Calculate total games from wins and draws
-                    games_in_batch = results['model1_wins'] + results['model2_wins'] + results['draws']
-                    total_games_played += games_in_batch
+                try:
+                    with open(result_file, 'rb') as f:
+                        results = pickle.load(f)
+                        total_model1_wins += results['model1_wins']
+                        total_model2_wins += results['model2_wins']
+                        total_draws += results['draws']
+                        # Calculate total games from wins and draws
+                        games_in_batch = results['model1_wins'] + results['model2_wins'] + results['draws']
+                        total_games_played += games_in_batch
+                except Exception as e:
+                    print(f"  Warning: Could not load {result_file.name}: {e}")
+
+        if total_games_played == 0:
+            print(f"\n  ⚠️  ERROR: No games completed successfully!")
+            return {
+                'model1_wins': 0,
+                'model2_wins': 0,
+                'draws': 0,
+                'total_games': 0,
+                'model1_win_rate': 0.5,
+                'model2_win_rate': 0.5,
+                'draw_rate': 0.0,
+                'eval_time': time.time() - start_time,
+                'games_per_second': 0,
+                'error': 'All workers failed'
+            }
     
     # Calculate rates
     model1_win_rate = total_model1_wins / total_games_played if total_games_played > 0 else 0

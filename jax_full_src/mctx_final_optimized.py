@@ -80,18 +80,25 @@ class MCTXFinalOptimized:
     3. Batched operations
     4. JIT compilation where beneficial
     """
-    
-    def __init__(self, batch_size: int, num_actions: int = 15, 
-                 max_nodes: int = 500, c_puct: float = 3.0, num_vertices: int = 6):
+
+    def __init__(self, batch_size: int, num_actions: int = 15,
+                 max_nodes: int = 500, c_puct: float = 3.0, num_vertices: int = 6,
+                 k: int = 3, game_mode: str = "symmetric", **kwargs):
         self.batch_size = batch_size
         self.num_actions = num_actions
         self.max_nodes = max_nodes
         self.c_puct = c_puct
         self.num_vertices = num_vertices
-        
+        self.k = k
+        self.game_mode = game_mode
+
         # Feature extractor
         self.feature_extractor = OptimizedBoardFeatures(num_vertices=num_vertices)
-        
+
+        # Pre-compute all possible k-cliques for win checking
+        import itertools
+        self.all_cliques = list(itertools.combinations(range(num_vertices), k))
+
         # Pre-compile critical functions
         self._init_arrays = jax.jit(self._init_arrays_impl)
         self._extract_features_batch = jax.jit(self._extract_features_batch_impl)
@@ -114,7 +121,42 @@ class MCTXFinalOptimized:
         edge_indices, edge_features = self.feature_extractor.extract_features_vectorized(edge_states)
         valid_masks = edge_states == 0
         return edge_indices, edge_features, valid_masks
-    
+
+    def _check_clique(self, edge_states_flat: np.ndarray, player: int) -> bool:
+        """
+        Check if a player has formed a k-clique.
+
+        Args:
+            edge_states_flat: Flat edge states array [num_edges]
+            player: Player to check (1 or 2)
+
+        Returns:
+            True if player has formed a k-clique
+        """
+        # Build adjacency matrix from flat edge states
+        adj = np.zeros((self.num_vertices, self.num_vertices), dtype=np.int32)
+        edge_idx = 0
+        for i in range(self.num_vertices):
+            for j in range(i + 1, self.num_vertices):
+                if edge_states_flat[edge_idx] == player:
+                    adj[i, j] = 1
+                    adj[j, i] = 1
+                edge_idx += 1
+
+        # Check all precomputed k-cliques
+        for clique in self.all_cliques:
+            is_clique = True
+            for i in range(len(clique)):
+                for j in range(i + 1, len(clique)):
+                    if adj[clique[i], clique[j]] == 0:
+                        is_clique = False
+                        break
+                if not is_clique:
+                    break
+            if is_clique:
+                return True
+        return False
+
     def _select_and_expand_batch(self, arrays: MCTSArrays) -> Tuple[MCTSArrays, jnp.ndarray, list]:
         """Select and expand - keeping Python loops for now as tree traversal is inherently sequential"""
         leaf_indices = []
@@ -209,25 +251,74 @@ class MCTXFinalOptimized:
         leaf_edge_states = arrays.edge_states[leaf_game_indices, leaf_node_indices]
         leaf_players = arrays.current_players[leaf_game_indices, leaf_node_indices]
         
-        # Extract features - this is now FAST!
-        edge_indices, edge_features, valid_masks = self._extract_features_batch(
-            leaf_edge_states, leaf_players
-        )
-        
-        # Neural network evaluation
-        policies, values = neural_network.evaluate_batch(edge_indices, edge_features, valid_masks)
-        
-        # Update arrays
+        # Check for terminal states and evaluate
+        terminal_values = []
         for i, (game_idx, node_idx) in enumerate(zip(leaf_game_indices, leaf_node_indices)):
-            arrays = arrays._replace(
-                P=arrays.P.at[game_idx, node_idx].set(policies[i]),
-                expanded=arrays.expanded.at[game_idx, node_idx].set(True)
+            edge_states = np.array(leaf_edge_states[i])
+            current_player = int(leaf_players[i])
+
+            # Check if current player (who just moved) formed a clique
+            player_value = current_player + 1  # Convert 0/1 to 1/2
+            has_clique = self._check_clique(edge_states, player_value)
+
+            if has_clique:
+                # Current player formed a clique
+                if self.game_mode == "avoid_clique":
+                    # In avoid_clique mode, forming a clique means you LOSE
+                    # Value is from NEXT player's perspective (who will move next)
+                    # They just won, so value = +1.0
+                    terminal_values.append(1.0)
+                else:
+                    # Normal mode: forming a clique means you WIN
+                    # Value is from next player's perspective
+                    # They just lost, so value = -1.0
+                    terminal_values.append(-1.0)
+            else:
+                # Check if there are valid moves
+                valid_mask = edge_states == 0
+                if not np.any(valid_mask):
+                    # Draw (no valid moves, no clique)
+                    terminal_values.append(0.0)
+                else:
+                    # Non-terminal, use neural network
+                    terminal_values.append(None)
+
+        # Separate terminal and non-terminal leaves
+        terminal_indices = [i for i, v in enumerate(terminal_values) if v is not None]
+        non_terminal_indices = [i for i, v in enumerate(terminal_values) if v is None]
+
+        # Evaluate non-terminal leaves with neural network
+        if non_terminal_indices:
+            nt_indices = jnp.array(non_terminal_indices)
+            nt_edge_states = leaf_edge_states[nt_indices]
+            nt_players = leaf_players[nt_indices]
+
+            edge_indices, edge_features, valid_masks = self._extract_features_batch(
+                nt_edge_states, nt_players
             )
-        
-        # Backup
+
+            policies, values = neural_network.evaluate_batch(edge_indices, edge_features, valid_masks)
+
+            # Update arrays with policies for non-terminal nodes
+            for idx, i in enumerate(non_terminal_indices):
+                game_idx = leaf_game_indices[i]
+                node_idx = leaf_node_indices[i]
+                arrays = arrays._replace(
+                    P=arrays.P.at[game_idx, node_idx].set(policies[idx]),
+                    expanded=arrays.expanded.at[game_idx, node_idx].set(True)
+                )
+                terminal_values[i] = float(values[idx, 0]) if values.ndim > 1 else float(values[idx])
+
+        # Mark terminal nodes as not expanded (they can't be expanded)
+        for i in terminal_indices:
+            game_idx = leaf_game_indices[i]
+            node_idx = leaf_node_indices[i]
+            # Don't mark as expanded - terminal nodes should stop traversal
+
+        # Backup all values
         for i, (game_idx, path) in enumerate(paths):
-            if i < len(values):
-                value = float(values[i, 0]) if values.ndim > 1 else float(values[i])
+            if i < len(terminal_values):
+                value = terminal_values[i]
                 for node_idx, action in reversed(path):
                     arrays = arrays._replace(
                         N=arrays.N.at[game_idx, node_idx, action].add(1),

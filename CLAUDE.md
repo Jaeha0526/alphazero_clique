@@ -55,6 +55,7 @@ python run_jax_optimized.py \
     --vertices 6 --k 3 \
     --num_epochs 20 \
     --eval_games 42 --eval_mcts_sims 30 \
+    --c_puct 3.0 \  # MCTS exploration constant (default: 3.0, try 1.0 for less exploration)
     --use_true_mctx \  # 5x faster MCTS with JAX primitives
     --parallel_evaluation \  # All eval games in single batch
     --hidden_dim 64 --num_layers 3 \  # Neural network architecture

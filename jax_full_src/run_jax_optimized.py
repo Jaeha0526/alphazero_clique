@@ -101,7 +101,9 @@ class OptimizedSelfPlay:
                     num_actions=num_actions,
                     max_nodes=self.config.mcts_simulations + 1,  # Only need sims + 1 nodes
                     num_vertices=self.config.num_vertices,
-                    c_puct=self.config.c_puct
+                    c_puct=self.config.c_puct,
+                    k=self.config.k,
+                    game_mode=self.config.game_mode
                 )
             
             # Initialize boards
@@ -125,12 +127,29 @@ class OptimizedSelfPlay:
                 # Get MCTS action probabilities using JIT-compiled search
                 mcts_start = time.time()
                 print(f"    Starting MCTS search...")
+
+                # Calculate temperature with gradual annealing (matching PyTorch)
+                max_moves = self.config.num_vertices * (self.config.num_vertices - 1) // 2
+                move_progress = len(game_data[0]) / max_moves if max_moves > 0 else 0.0
+
+                # Gradual temperature annealing schedule (matches PyTorch)
+                if move_progress < 0.2:    # First 20% of game
+                    temperature = 1.0      # High exploration
+                elif move_progress < 0.4:  # Next 20%
+                    temperature = 0.8      # Still good exploration
+                elif move_progress < 0.6:  # Middle 20%
+                    temperature = 0.5      # Balanced
+                elif move_progress < 0.8:  # Next 20%
+                    temperature = 0.2      # More exploitation
+                else:                      # Last 20%
+                    temperature = 0.1      # Strong exploitation
+
                 try:
                     mcts_probs, visit_counts = mcts.search(
                         boards,
                         neural_network,
                         self.config.mcts_simulations,
-                        temperature=1.0 if len(game_data[0]) < self.config.temperature_threshold else 0.0
+                        temperature=temperature
                     )
                     mcts_time = time.time() - mcts_start
                     print(f"    MCTS search completed in {mcts_time:.2f}s")
@@ -217,12 +236,16 @@ class OptimizedSelfPlay:
                 all_games_info.append(game_info)
                 
                 for move_data in game_data[i]:
-                    # Perspective-based value
-                    if self.config.perspective_mode == "alternating":
+                    # Perspective-based value (following PyTorch implementation)
+                    if winner == -1:  # Draw (game_state == 3)
+                        value = 0.0
+                    elif self.config.perspective_mode == "alternating":
+                        # Alternating perspective: from current player's perspective
                         value = 1.0 if move_data['player'] == winner else -1.0
                     else:
-                        value = 1.0 if winner == 1 else -1.0
-                    
+                        # Fixed perspective: always from Player 1's perspective
+                        value = 1.0 if winner == 0 else -1.0
+
                     move_data['value'] = value
                     all_game_data.append(move_data)
             
@@ -475,6 +498,8 @@ def main():
                         help='Clique size to win')
     parser.add_argument('--mcts_sims', type=int, default=50,
                         help='Number of MCTS simulations per move')
+    parser.add_argument('--c_puct', type=float, default=3.0,
+                        help='Exploration constant for MCTS UCB formula (default: 3.0)')
     parser.add_argument('--experiment_name', type=str, default='optimized_jax_run',
                         help='Name for this experiment')
     parser.add_argument('--resume_from', type=str, default=None,
@@ -532,8 +557,7 @@ def main():
         k: int = args.k
         game_mode: str = "avoid_clique" if args.avoid_clique else ("asymmetric" if args.asymmetric else "symmetric")
         mcts_simulations: int = args.mcts_sims
-        temperature_threshold: int = 10
-        c_puct: float = 3.0
+        c_puct: float = args.c_puct
         perspective_mode: str = "alternating"
         use_true_mctx: bool = args.use_true_mctx
     
@@ -788,7 +812,7 @@ def main():
                 'k': args.k,
                 'game_mode': config.game_mode,  # Use the game_mode from config
                 'mcts_sims': args.eval_mcts_sims if args.eval_mcts_sims else 30,
-                'c_puct': 3.0,
+                'c_puct': config.c_puct,  # Use the same c_puct as training
                 'use_true_mctx': False if args.python_eval else config.use_true_mctx,  # Override for evaluation
                 'python_eval': args.python_eval  # Pass the flag
             }
