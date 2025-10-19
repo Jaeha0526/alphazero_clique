@@ -6,6 +6,7 @@ This project implements the AlphaZero algorithm for the Clique Game, using Graph
 - **Undirected Graph GNN:** Optimized GNN architecture working directly with undirected edges
 - **Flexible Value Learning:** Supports both fixed and alternating perspective modes for better value learning
 - **Draw-Heavy Scenario Support:** Skill variation and specialized evaluation metrics for challenging game configurations
+- **Auxiliary Loss for Avoid-Clique Mode:** Penalizes immediate-loss moves to prevent "dumb moves" and improve training efficiency
 - **Experiment Management:** Organized experiment tracking with comprehensive logging and analysis tools
 
 Main structure of the code originated from https://github.com/geochri/AlphaZero_Chess
@@ -59,6 +60,18 @@ The Clique Game is played on an undirected graph with N vertices. There are two 
 - Player 1 wins by forming a k-clique
 - Player 2 wins by preventing Player 1 from forming a k-clique
 - If no more moves are possible and no k-clique is formed, Player 2 wins
+
+### Avoid Clique Mode (Ramsey Number Search)
+- **Both players try to AVOID forming a k-clique** (inverted from symmetric mode)
+- Players take turns coloring edges with their color
+- Forming a k-clique in your color causes **immediate loss**
+- Opponent wins if you form a k-clique in your color
+- Game is a **draw** if all edges are colored without any k-clique (potential Ramsey counterexample!)
+- Use `--avoid_clique` flag with JAX implementation
+- **Auxiliary Loss**: Use `--aux_loss_weight 1.0` to penalize "dumb moves" that immediately form k-cliques
+  - Without auxiliary loss, models may waste probability on immediate-loss moves
+  - With auxiliary loss (weight 1.0), models learn to avoid immediate-loss moves (~26% reduction in dumb move probability)
+  - Recommended for avoid_clique mode to improve training efficiency
 
 ## Interactive Game Interface
 
@@ -328,6 +341,16 @@ python jax_full_src/run_jax_optimized.py \
     --eval_games 100 \
     # ... other parameters
 
+# Avoid-clique mode with auxiliary loss (prevents "dumb moves")
+python jax_full_src/run_jax_optimized.py \
+    --experiment_name ramsey_search \
+    --avoid_clique \
+    --vertices 6 --k 3 \
+    --aux_loss_weight 1.0 \
+    --num_iterations 15 --num_episodes 100 \
+    --mcts_sims 50 --eval_mcts_sims 30 \
+    --use_true_mctx --parallel_evaluation
+
 # Standalone evaluation of saved models
 python jax_full_src/standalone_evaluation.py \
     --experiment my_experiment \
@@ -383,6 +406,7 @@ All evaluation modes respect:
 - **Game Modes**: symmetric, asymmetric, avoid_clique (for Ramsey counterexamples)
 - **Neural Network Architecture**: `--hidden_dim` (default: 64) and `--num_layers` (default: 3) for GNN configuration
 - **Game Data Saving**: `--save_full_game_data` to save complete game data every iteration (not just every 5)
+- **Auxiliary Loss** (avoid_clique mode): `--aux_loss_weight` (default: 0.0) penalizes immediate-loss moves to prevent "dumb moves"
 
 ### ⚠️ Important Performance Considerations
 
@@ -397,6 +421,47 @@ JAX recompiles functions when input shapes change. This causes significant delay
 --game_batch_size 50 --eval_games 50  # Same batch size
 --mcts_sims 100 --eval_mcts_sims 100  # Same MCTS depth
 ```
+
+### JAX Command-Line Arguments
+
+The `run_jax_optimized.py` script accepts the following command-line arguments:
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--num_iterations` | int | 20 | Number of training iterations |
+| `--num_episodes` | int | 100 | Number of self-play games per iteration |
+| `--game_batch_size` | int | 32 | Number of games to play in parallel during self-play |
+| `--training_batch_size` | int | 32 | Batch size for neural network training |
+| `--num_epochs` | int | 10 | Number of training epochs per iteration |
+| `--aux_loss_weight` | float | 0.0 | Weight for auxiliary loss (penalizes immediate-loss moves in avoid_clique mode) |
+| `--checkpoint_dir` | str | checkpoints_jax_optimized | Directory to save checkpoints |
+| `--asymmetric` | flag | False | Use asymmetric game mode |
+| `--avoid_clique` | flag | False | Use avoid_clique mode (forming clique loses, for Ramsey search) |
+| `--vertices` | int | 6 | Number of vertices in the graph |
+| `--k` | int | 3 | Clique size to win (or avoid in avoid_clique mode) |
+| `--mcts_sims` | int | 50 | Number of MCTS simulations per move during self-play |
+| `--c_puct` | float | 3.0 | Exploration constant for MCTS UCB formula |
+| `--experiment_name` | str | optimized_jax_run | Name for this experiment (creates experiments/<name>/) |
+| `--resume_from` | str | None | Path to checkpoint to resume from |
+| `--use_true_mctx` | flag | False | Use pure JAX MCTS implementation (5x faster, more compilation overhead) |
+| `--parallel_evaluation` | flag | False | Run all evaluation games in single batch (10x faster evaluation) |
+| `--use_validation` | flag | False | Use validation split and early stopping |
+| `--eval_games` | int | 21/40 | Number of evaluation games (default: 21 for symmetric, 40 for asymmetric) |
+| `--eval_mcts_sims` | int | 30 | MCTS simulations for evaluation (default: 30) |
+| `--python_eval` | flag | False | Use Python MCTS for evaluation (avoids JAX compilation overhead) |
+| `--skip_evaluation` | flag | False | Skip evaluation during training (for quick iterations) |
+| `--subprocess_eval` | flag | False | Use subprocess parallelization for evaluation |
+| `--eval_num_cpus` | int | 4 | Number of CPUs for subprocess evaluation |
+| `--save_full_game_data` | flag | False | Save complete game data every iteration (default: every 5) |
+| `--hidden_dim` | int | 64 | Hidden dimension for neural network |
+| `--num_layers` | int | 3 | Number of GNN layers |
+
+**Important Notes:**
+- **Auxiliary Loss**: Only active in `--avoid_clique` mode. Weight of 1.0 is recommended to reduce probability on immediate-loss moves by ~26%.
+- **MCTS Implementation**: `--use_true_mctx` enables pure JAX MCTS (5x faster) but causes compilation overhead on first run.
+- **Evaluation Speedup**: Combine `--parallel_evaluation` with `--use_true_mctx` for maximum speed (10x faster evaluation).
+- **Compilation Overhead**: Match `--game_batch_size` with `--eval_games` and `--mcts_sims` with `--eval_mcts_sims` to avoid recompilation.
+- **Resume Training**: Use `--resume_from experiments/<name>/checkpoints/checkpoint_iter_N.pkl` to continue training.
 
 ### Requirements for JAX Version
 
