@@ -165,12 +165,12 @@ def evaluate_vs_initial_and_best_truly_parallel(
     while jnp.any(boards.game_states == 0) and move_count < max_moves:
         active_games = jnp.sum(boards.game_states == 0)
         
-        # Get action probabilities from all models
-        probs_current = mcts_current.search(boards, current_model, mcts_sims, temperature)
-        probs_initial = mcts_initial.search(boards, initial_model, mcts_sims, temperature)
-        
+        # Get action probabilities from all models (unpack tuple)
+        probs_current, _ = mcts_current.search(boards, current_model, mcts_sims, temperature)
+        probs_initial, _ = mcts_initial.search(boards, initial_model, mcts_sims, temperature)
+
         if eval_both:
-            probs_best = mcts_best.search(boards, best_model, mcts_sims, temperature)
+            probs_best, _ = mcts_best.search(boards, best_model, mcts_sims, temperature)
         
         # Select actions based on game assignment and current player
         actions = []

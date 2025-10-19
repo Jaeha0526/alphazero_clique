@@ -10,6 +10,7 @@ import numpy as np
 from typing import List, Dict, Tuple, Any
 import time
 from functools import partial
+from vectorized_board import compute_immediate_loss_mask_batch
 
 
 class TrainState(train_state.TrainState):
@@ -21,9 +22,10 @@ class TrainState(train_state.TrainState):
 
 
 # JIT-compiled train step with static arguments
-@partial(jit, static_argnames=['asymmetric_mode', 'value_weight', 'label_smoothing'])
+@partial(jit, static_argnames=['asymmetric_mode', 'value_weight', 'label_smoothing', 'aux_loss_weight'])
 def train_step_optimized(state: TrainState, batch: Dict, rng, asymmetric_mode: bool = False,
-                        value_weight: float = 1.0, label_smoothing: float = 0.1):
+                        value_weight: float = 1.0, label_smoothing: float = 0.1,
+                        aux_loss_weight: float = 0.0):
     """JIT-compiled training step for maximum performance."""
     
     def loss_fn(params):
@@ -73,9 +75,23 @@ def train_step_optimized(state: TrainState, batch: Dict, rng, asymmetric_mode: b
         for p in jax.tree_util.tree_leaves(params):
             l2_reg += jnp.sum(p ** 2)
         l2_reg *= 1e-5
-        
-        # Combined loss
-        total_loss = policy_loss + value_weight * value_loss + l2_reg
+
+        # NEW: Auxiliary loss for immediate-loss moves (avoid_clique mode)
+        auxiliary_loss = 0.0
+        if aux_loss_weight > 0 and 'immediate_loss_mask' in batch:
+            # immediate_loss_mask: (batch_size, num_actions) boolean
+            # policies: (batch_size, num_actions)
+
+            # Penalize high probability on immediate-loss moves
+            immediate_loss_probs = policies * batch['immediate_loss_mask']
+
+            # Average probability mass on immediate-loss moves per sample
+            num_loss_moves = jnp.sum(batch['immediate_loss_mask'], axis=1, keepdims=True) + 1e-8
+            avg_prob_per_loss_move = jnp.sum(immediate_loss_probs, axis=1, keepdims=True) / num_loss_moves
+            auxiliary_loss = jnp.mean(avg_prob_per_loss_move)
+
+        # Combined loss with configurable weights
+        total_loss = policy_loss + value_weight * value_loss + l2_reg + aux_loss_weight * auxiliary_loss
         
         # Compute per-role losses for asymmetric mode
         attacker_policy_loss = 0.0
@@ -99,33 +115,33 @@ def train_step_optimized(state: TrainState, batch: Dict, rng, asymmetric_mode: b
                 jnp.sum(policy_loss_per_sample * defender_mask) / defender_count,
                 0.0
             )
-        
-        return total_loss, (policy_loss, value_loss, attacker_policy_loss, defender_policy_loss)
+
+        return total_loss, (policy_loss, value_loss, auxiliary_loss, attacker_policy_loss, defender_policy_loss)
     
     # Compute gradients
     grad_fn = grad(loss_fn, has_aux=True)
-    grads, (policy_loss, value_loss, attacker_policy_loss, defender_policy_loss) = grad_fn(state.params)
-    
+    grads, (policy_loss, value_loss, auxiliary_loss, attacker_policy_loss, defender_policy_loss) = grad_fn(state.params)
+
     # Gradient clipping
     grad_norm = jnp.sqrt(sum(jnp.sum(g ** 2) for g in jax.tree_util.tree_leaves(grads)))
     grads = jax.tree_util.tree_map(
         lambda g: jnp.where(grad_norm > 1.0, g / grad_norm, g),
         grads
     )
-    
+
     # Update parameters
     state = state.apply_gradients(grads=grads)
     state = state.replace(
-        policy_loss=policy_loss, 
+        policy_loss=policy_loss,
         value_loss=value_loss,
         attacker_policy_loss=attacker_policy_loss,
         defender_policy_loss=defender_policy_loss
     )
-    
-    return state
+
+    return state, auxiliary_loss
 
 
-def prepare_batch_vectorized(experiences_array: Dict[str, jnp.ndarray], 
+def prepare_batch_vectorized(experiences_array: Dict[str, jnp.ndarray],
                             indices: jnp.ndarray) -> Dict[str, jnp.ndarray]:
     """Vectorized batch preparation using JAX operations."""
     # Simply gather from pre-stacked arrays
@@ -135,36 +151,45 @@ def prepare_batch_vectorized(experiences_array: Dict[str, jnp.ndarray],
         'target_policies': experiences_array['policies'][indices],
         'target_values': experiences_array['values'][indices]
     }
-    
+
     if 'player_roles' in experiences_array:
         batch['player_roles'] = experiences_array['player_roles'][indices]
-    
+
+    if 'immediate_loss_mask' in experiences_array:
+        batch['immediate_loss_mask'] = experiences_array['immediate_loss_mask'][indices]
+
     return batch
 
 
-def preprocess_experiences(experiences: List[Dict]) -> Dict[str, jnp.ndarray]:
+def preprocess_experiences(experiences: List[Dict], game_mode: str = "symmetric",
+                          k: int = 3, num_vertices: int = 6) -> Dict[str, jnp.ndarray]:
     """Convert list of experiences to stacked JAX arrays for fast indexing."""
     print("Preprocessing experiences into JAX arrays...")
-    
+
     # Pre-allocate arrays
     num_exp = len(experiences)
     first_exp = experiences[0]
-    
+
     # Get shapes
     edge_indices_shape = first_exp['edge_indices'].shape
     edge_features_shape = first_exp['edge_features'].shape
     policy_shape = first_exp['policy'].shape
-    
+
     # Allocate numpy arrays first (faster than lists)
     edge_indices_arr = np.zeros((num_exp,) + edge_indices_shape, dtype=np.int32)
     edge_features_arr = np.zeros((num_exp,) + edge_features_shape, dtype=np.float32)
     policies_arr = np.zeros((num_exp,) + policy_shape, dtype=np.float32)
     values_arr = np.zeros((num_exp, 1), dtype=np.float32)
-    
+
     has_roles = 'player_role' in first_exp and first_exp['player_role'] is not None
     if has_roles:
         player_roles_arr = np.zeros(num_exp, dtype=np.int32)
-    
+
+    # Check if we need to compute immediate loss masks
+    has_players = 'player' in first_exp
+    if has_players:
+        players_arr = np.zeros(num_exp, dtype=np.int32)
+
     # Fill arrays
     for i, exp in enumerate(experiences):
         edge_indices_arr[i] = exp['edge_indices']
@@ -173,7 +198,9 @@ def preprocess_experiences(experiences: List[Dict]) -> Dict[str, jnp.ndarray]:
         values_arr[i, 0] = exp['value']
         if has_roles:
             player_roles_arr[i] = exp['player_role']
-    
+        if has_players:
+            players_arr[i] = exp['player']
+
     # Convert to JAX arrays
     result = {
         'edge_indices': jnp.array(edge_indices_arr),
@@ -181,10 +208,23 @@ def preprocess_experiences(experiences: List[Dict]) -> Dict[str, jnp.ndarray]:
         'policies': jnp.array(policies_arr),
         'values': jnp.array(values_arr)
     }
-    
+
     if has_roles:
         result['player_roles'] = jnp.array(player_roles_arr)
-    
+
+    # NEW: Compute immediate loss mask for avoid_clique mode
+    if game_mode == "avoid_clique" and has_players:
+        print("Computing immediate loss masks for avoid_clique mode...")
+        current_players_array = jnp.array(players_arr, dtype=jnp.int32)
+        immediate_loss_mask = compute_immediate_loss_mask_batch(
+            jnp.array(edge_features_arr),
+            current_players_array,
+            k,
+            num_vertices,
+            game_mode
+        )
+        result['immediate_loss_mask'] = immediate_loss_mask
+
     return result
 
 
@@ -198,23 +238,36 @@ def train_network_jax_optimized(
     initial_state: TrainState = None,
     asymmetric_mode: bool = False,
     value_weight: float = 1.0,
-    label_smoothing: float = 0.1
-) -> Tuple[TrainState, float, float]:
+    label_smoothing: float = 0.1,
+    aux_loss_weight: float = 0.0,
+    game_mode: str = "symmetric",
+    k: int = 3,
+    num_vertices: int = 6
+) -> Tuple[TrainState, float, float, float]:
     """
     Fully optimized training with:
     - JIT-compiled train step
     - Vectorized batch preparation
     - Pre-processed experience arrays
+    - Auxiliary loss for avoid_clique mode
+
+    Returns:
+        state: Final training state
+        avg_policy_loss: Average policy loss
+        avg_value_loss: Average value loss
+        avg_aux_loss: Average auxiliary loss
     """
-    
+
     # Preprocess experiences once
     start_preprocess = time.time()
-    experiences_array = preprocess_experiences(experiences)
+    experiences_array = preprocess_experiences(experiences, game_mode, k, num_vertices)
     preprocess_time = time.time() - start_preprocess
-    
+
     if verbose:
         print(f"Preprocessing completed in {preprocess_time:.2f}s")
         print(f"Total training examples: {len(experiences)}")
+        if aux_loss_weight > 0:
+            print(f"Auxiliary loss weight: {aux_loss_weight}")
     
     # Initialize
     rng = jax.random.PRNGKey(42)
@@ -246,6 +299,7 @@ def train_network_jax_optimized(
     # Training metrics
     policy_losses = []
     value_losses = []
+    auxiliary_losses = []
     attacker_policy_losses = []
     defender_policy_losses = []
     
@@ -270,78 +324,85 @@ def train_network_jax_optimized(
         epoch_start = time.time()
         epoch_policy_loss = 0.0
         epoch_value_loss = 0.0
+        epoch_aux_loss = 0.0
         epoch_attacker_loss = 0.0
         epoch_defender_loss = 0.0
-        
+
         # Shuffle indices once per epoch
         rng, shuffle_rng = jax.random.split(rng)
         shuffled_indices = jax.random.permutation(shuffle_rng, all_indices)
-        
+
         for step in range(steps_per_epoch):
             # Get batch indices
             start_idx = step * batch_size
             end_idx = min(start_idx + batch_size, len(experiences))
             batch_indices = shuffled_indices[start_idx:end_idx]
-            
+
             # Prepare batch (vectorized)
             batch = prepare_batch_vectorized(experiences_array, batch_indices)
-            
+
             # Training step (JIT-compiled)
             rng, step_rng = jax.random.split(rng)
-            state = train_step_optimized(
-                state, batch, step_rng, 
+            state, aux_loss = train_step_optimized(
+                state, batch, step_rng,
                 asymmetric_mode=asymmetric_mode,
                 value_weight=value_weight,
-                label_smoothing=label_smoothing
+                label_smoothing=label_smoothing,
+                aux_loss_weight=aux_loss_weight
             )
-            
+
             epoch_policy_loss += state.policy_loss
             epoch_value_loss += state.value_loss
+            epoch_aux_loss += aux_loss
             epoch_attacker_loss += state.attacker_policy_loss
             epoch_defender_loss += state.defender_policy_loss
         
         # Record epoch metrics
         avg_policy_loss = epoch_policy_loss / steps_per_epoch
         avg_value_loss = epoch_value_loss / steps_per_epoch
+        avg_aux_loss = epoch_aux_loss / steps_per_epoch
         avg_attacker_loss = epoch_attacker_loss / steps_per_epoch
         avg_defender_loss = epoch_defender_loss / steps_per_epoch
         policy_losses.append(float(avg_policy_loss))
         value_losses.append(float(avg_value_loss))
+        auxiliary_losses.append(float(avg_aux_loss))
         attacker_policy_losses.append(float(avg_attacker_loss))
         defender_policy_losses.append(float(avg_defender_loss))
-        
+
         epoch_time = time.time() - epoch_start
-        
+
         if verbose and (epoch % max(1, epochs // 10) == 0 or epoch == epochs - 1):
+            msg = f"Epoch {epoch+1}/{epochs} - "
             if asymmetric_mode and avg_attacker_loss > 0:
-                print(f"Epoch {epoch+1}/{epochs} - "
-                      f"Policy Loss: {avg_policy_loss:.4f} (A: {avg_attacker_loss:.4f}, D: {avg_defender_loss:.4f}), "
-                      f"Value Loss: {avg_value_loss:.4f}, "
-                      f"Time: {epoch_time:.2f}s")
+                msg += f"Policy Loss: {avg_policy_loss:.4f} (A: {avg_attacker_loss:.4f}, D: {avg_defender_loss:.4f}), "
             else:
-                print(f"Epoch {epoch+1}/{epochs} - "
-                      f"Policy Loss: {avg_policy_loss:.4f}, "
-                      f"Value Loss: {avg_value_loss:.4f}, "
-                      f"Time: {epoch_time:.2f}s")
+                msg += f"Policy Loss: {avg_policy_loss:.4f}, "
+            msg += f"Value Loss: {avg_value_loss:.4f}"
+            if aux_loss_weight > 0:
+                msg += f", Aux Loss: {avg_aux_loss:.4f}"
+            msg += f", Time: {epoch_time:.2f}s"
+            print(msg)
     
     elapsed = time.time() - start_time
-    
+
     if verbose:
         print(f"\nTraining completed in {elapsed:.1f}s")
         print(f"Average time per epoch: {elapsed/epochs:.2f}s")
         print(f"Average time per step: {elapsed/(epochs*steps_per_epoch)*1000:.1f}ms")
         print(f"Throughput: {len(experiences)*epochs/elapsed:.0f} samples/sec")
+
+        msg = "Final losses - "
         if asymmetric_mode and attacker_policy_losses[-1] > 0:
-            print(f"Final losses - Policy: {policy_losses[-1]:.4f} (A: {attacker_policy_losses[-1]:.4f}, D: {defender_policy_losses[-1]:.4f}), Value: {value_losses[-1]:.4f}")
+            msg += f"Policy: {policy_losses[-1]:.4f} (A: {attacker_policy_losses[-1]:.4f}, D: {defender_policy_losses[-1]:.4f}), "
         else:
-            print(f"Final losses - Policy: {policy_losses[-1]:.4f}, Value: {value_losses[-1]:.4f}")
-    
-    # Return additional metrics for asymmetric mode
-    result = (state, np.mean(policy_losses), np.mean(value_losses))
-    if asymmetric_mode:
-        result = result + (np.mean(attacker_policy_losses), np.mean(defender_policy_losses))
-    
-    return result
+            msg += f"Policy: {policy_losses[-1]:.4f}, "
+        msg += f"Value: {value_losses[-1]:.4f}"
+        if aux_loss_weight > 0:
+            msg += f", Aux: {auxiliary_losses[-1]:.4f}"
+        print(msg)
+
+    # Return final state and average losses
+    return state, np.mean(policy_losses), np.mean(value_losses), np.mean(auxiliary_losses)
 
 
 # Re-export save/load functions from original module

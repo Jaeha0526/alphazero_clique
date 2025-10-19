@@ -184,14 +184,14 @@ class VectorizedCliqueBoard:
             # Check if all edges in this clique belong to same player
             for player in [1, 2]:
                 clique_complete = jnp.ones(self.batch_size, dtype=jnp.bool_)
-                
+
                 for (i, j) in edges:
                     edge_matches = (self.edge_states[:, i, j] == player)
                     clique_complete = clique_complete & edge_matches
-                
+
                 # Update game states where this player completed a clique
                 newly_won = clique_complete & (self.game_states == 0)
-                
+
                 if self.game_mode == "avoid_clique":
                     # In avoid_clique mode, forming a clique means you LOSE
                     # So the OTHER player wins
@@ -202,6 +202,61 @@ class VectorizedCliqueBoard:
                     # Normal modes: forming a clique means you WIN
                     self.game_states = jnp.where(newly_won, player, self.game_states)
                     self.winners = jnp.where(newly_won, player - 1, self.winners)
+
+    def get_immediate_loss_mask(self, game_idx: int) -> np.ndarray:
+        """
+        Get mask of actions that would immediately cause the current player to lose.
+        In avoid_clique mode, these are actions that form a k-clique.
+
+        Args:
+            game_idx: Index of the game in the batch
+
+        Returns:
+            Boolean array of shape (num_edges,) where True means action causes immediate loss
+        """
+        if self.game_mode != "avoid_clique":
+            # Only relevant for avoid_clique mode
+            return np.zeros(self.num_edges, dtype=bool)
+
+        current_player = int(self.current_players[game_idx])
+        edge_states_np = np.array(self.edge_states[game_idx])
+
+        immediate_loss_mask = np.zeros(self.num_edges, dtype=bool)
+
+        # Check each possible action
+        for action_idx in range(self.num_edges):
+            i, j = self.action_to_edge[action_idx]
+
+            # Skip if edge already selected
+            if edge_states_np[i, j] != 0:
+                continue
+
+            # Simulate taking this action
+            player_value = current_player + 1  # 0 -> 1, 1 -> 2
+
+            # Check if this action would form a k-clique for current player
+            for clique_edges in self.clique_edges:
+                clique_complete = True
+
+                for (ci, cj) in clique_edges:
+                    # Check if this edge belongs to current player
+                    if (ci, cj) == (i, j) or (cj, ci) == (i, j):
+                        # This is the edge we're considering
+                        edge_belongs_to_player = True
+                    else:
+                        # Check existing edge state
+                        edge_belongs_to_player = (edge_states_np[ci, cj] == player_value)
+
+                    if not edge_belongs_to_player:
+                        clique_complete = False
+                        break
+
+                if clique_complete:
+                    # This action would form a k-clique -> immediate loss!
+                    immediate_loss_mask[action_idx] = True
+                    break
+
+        return immediate_loss_mask
     
     def get_board_states(self) -> List[Dict]:
         """
@@ -377,6 +432,110 @@ def create_boards_batch(batch_size: int, num_vertices: int = 6, k: int = 3,
                        game_mode: str = "asymmetric") -> VectorizedCliqueBoard:
     """Create a batch of boards."""
     return VectorizedCliqueBoard(batch_size, num_vertices, k, game_mode)
+
+
+def compute_immediate_loss_mask_batch(
+    edge_features: jnp.ndarray,  # Shape: (batch_size, num_edges, 3)
+    current_players: jnp.ndarray,  # Shape: (batch_size,)
+    k: int,
+    num_vertices: int,
+    game_mode: str = "avoid_clique"
+) -> jnp.ndarray:
+    """
+    Compute immediate loss mask for a batch of states (for training).
+    For avoid_clique mode, returns mask of actions that would form a k-clique.
+
+    Args:
+        edge_features: One-hot encoded edge features
+        current_players: Current player for each game (0 or 1)
+        k: Clique size
+        num_vertices: Number of vertices
+        game_mode: Game mode
+
+    Returns:
+        Boolean array of shape (batch_size, num_edges)
+    """
+    if game_mode != "avoid_clique":
+        batch_size = edge_features.shape[0]
+        num_edges = edge_features.shape[1]
+        return jnp.zeros((batch_size, num_edges), dtype=jnp.bool_)
+
+    batch_size = edge_features.shape[0]
+    num_edges = edge_features.shape[1]
+
+    # Convert edge features back to edge states
+    # edge_features[:, :, 0] = 1 means unselected (state 0)
+    # edge_features[:, :, 1] = 1 means player 1 (state 1)
+    # edge_features[:, :, 2] = 1 means player 2 (state 2)
+    edge_states = jnp.argmax(edge_features, axis=-1)  # (batch_size, num_edges)
+
+    # Precompute all k-cliques
+    vertices = list(range(num_vertices))
+    all_cliques = list(itertools.combinations(vertices, k))
+
+    # Build edge mapping
+    edge_to_action = {}
+    action_to_edge = {}
+    idx = 0
+    for i in range(num_vertices):
+        for j in range(i + 1, num_vertices):
+            edge_to_action[(i, j)] = idx
+            action_to_edge[idx] = (i, j)
+            idx += 1
+
+    # Precompute clique edges (list of edges for each clique)
+    clique_edges_list = []
+    for clique in all_cliques:
+        edges = []
+        for i in range(len(clique)):
+            for j in range(i + 1, len(clique)):
+                edges.append((clique[i], clique[j]))
+        clique_edges_list.append(edges)
+
+    # Compute mask for each game in batch
+    masks = []
+    for batch_idx in range(batch_size):
+        player = int(current_players[batch_idx])
+        player_value = player + 1  # 0 -> 1, 1 -> 2
+        edge_states_game = np.array(edge_states[batch_idx])
+
+        immediate_loss_mask = np.zeros(num_edges, dtype=bool)
+
+        # Check each action
+        for action_idx in range(num_edges):
+            i, j = action_to_edge[action_idx]
+
+            # Skip if edge already selected
+            if edge_states_game[action_idx] != 0:
+                continue
+
+            # Check if this action would form a k-clique
+            for clique_edges in clique_edges_list:
+                clique_complete = True
+
+                for (ci, cj) in clique_edges:
+                    action_for_edge = edge_to_action[(ci, cj)]
+
+                    # Check if this edge belongs to current player
+                    if action_for_edge == action_idx:
+                        # This is the edge we're considering
+                        edge_belongs_to_player = True
+                    else:
+                        # Check existing edge state
+                        edge_belongs_to_player = (edge_states_game[action_for_edge] == player_value)
+
+                    if not edge_belongs_to_player:
+                        clique_complete = False
+                        break
+
+                if clique_complete:
+                    # This action would form a k-clique -> immediate loss!
+                    immediate_loss_mask[action_idx] = True
+                    break
+
+        masks.append(immediate_loss_mask)
+
+    return jnp.array(masks, dtype=jnp.bool_)
 
 
 if __name__ == "__main__":

@@ -485,7 +485,9 @@ def main():
                         help='Batch size for neural network training')
     parser.add_argument('--num_epochs', type=int, default=10,
                         help='Number of training epochs per iteration')
-    parser.add_argument('--checkpoint_dir', type=str, 
+    parser.add_argument('--aux_loss_weight', type=float, default=0.0,
+                        help='Weight for auxiliary loss (penalizes immediate-loss moves in avoid_clique mode, default: 0.0)')
+    parser.add_argument('--checkpoint_dir', type=str,
                         default='checkpoints_jax_optimized',
                         help='Directory to save checkpoints')
     parser.add_argument('--asymmetric', action='store_true',
@@ -755,6 +757,7 @@ def main():
                 early_stopping_min_delta=0.001  # Same as PyTorch
             )
             # Store training history for analysis (if needed later)
+            aux_loss = 0.0  # Validation training doesn't use auxiliary loss yet
         else:
             # Use optimized training without validation
             use_optimized_training = getattr(args, 'optimized_training', True)
@@ -774,14 +777,21 @@ def main():
                 batch_size=args.training_batch_size,
                 learning_rate=0.001,
                 initial_state=optimizer_state,
-                asymmetric_mode=args.asymmetric
+                asymmetric_mode=args.asymmetric,
+                aux_loss_weight=args.aux_loss_weight,
+                game_mode=config.game_mode,
+                k=config.k,
+                num_vertices=config.num_vertices
             )
             
-            # Unpack results based on asymmetric mode
-            if args.asymmetric and len(training_result) == 5:
-                train_state, policy_loss, value_loss, attacker_policy_loss, defender_policy_loss = training_result
+            # Unpack results - now includes auxiliary loss
+            # Format: (state, policy_loss, value_loss, aux_loss)
+            if len(training_result) >= 4:
+                train_state, policy_loss, value_loss, aux_loss = training_result[:4]
             else:
-                train_state, policy_loss, value_loss = training_result[:3]  # Handle both cases safely
+                # Fallback for old training functions
+                train_state, policy_loss, value_loss = training_result[:3]
+                aux_loss = 0.0
         
         # Update model params and optimizer state
         model.params = train_state.params
@@ -789,11 +799,11 @@ def main():
         
         training_time = time.time() - start_time
         print(f"Training completed in {training_time:.1f}s")
-        # Print final losses with asymmetric breakdown if available
-        if args.asymmetric and attacker_policy_loss is not None and defender_policy_loss is not None:
-            print(f"Final losses - Policy: {policy_loss:.4f} (Attacker: {attacker_policy_loss:.4f}, Defender: {defender_policy_loss:.4f}), Value: {value_loss:.4f}")
-        else:
-            print(f"Final losses - Policy: {policy_loss:.4f}, Value: {value_loss:.4f}")
+        # Print final losses
+        msg = f"Final losses - Policy: {policy_loss:.4f}, Value: {value_loss:.4f}"
+        if args.aux_loss_weight > 0 and 'aux_loss' in locals():
+            msg += f", Aux: {aux_loss:.4f}"
+        print(msg)
         
         # Skip evaluation if requested
         if args.skip_evaluation:
@@ -1041,6 +1051,7 @@ def main():
             'total_time': self_play_time + training_time + eval_time,
             'validation_policy_loss': float(policy_loss),
             'validation_value_loss': float(value_loss),
+            'validation_aux_loss': float(aux_loss) if 'aux_loss' in locals() else 0.0,
             'evaluation_win_rate_vs_initial': float(win_rate_vs_initial),
             'evaluation_win_rate_vs_best': float(win_rate_vs_best),
             'best_model_iteration': best_model_iteration,
